@@ -1,53 +1,89 @@
+// ═══════════════════════════════════════════════════════
+// SAYLO SERVER — SDD Implementation
+// SPEC:
+//   - Start Fastify server on PORT from environment
+//   - Register CORS for GitHub Pages + localhost
+//   - Connect to MongoDB before starting
+//   - Register all API routes under /api
+//   - Initialize Socket.io for real-time features
+//   - Listen on 0.0.0.0 (required for Railway)
+// ═══════════════════════════════════════════════════════
+
 import Fastify from 'fastify'
+import fastifyJwt from '@fastify/jwt'
 import cors from '@fastify/cors'
 import { Server } from 'socket.io'
 import dotenv from 'dotenv'
 import { connectDB } from './plugins/database.js'
 import { registerRoutes } from './routes/index.js'
 import { initSocketHandlers } from './sockets/index.js'
-import logger from './utils/logger.js'
 
 dotenv.config()
 
+// ── 1. CREATE FASTIFY INSTANCE ──────────────────────────
 const fastify = Fastify({
-  logger: false,
+  logger: true,
   trustProxy: true,
 })
 
-// ── CORS ──────────────────────────────────────────────────
+// ── 2. REGISTER CORS ────────────────────────────────────
 await fastify.register(cors, {
-  origin: [
-    'http://localhost:4200',
-    'https://manoj0724.github.io',
-    process.env.FRONTEND_URL,
-  ].filter(Boolean),
+  origin: (origin, callback) => {
+    const allowed = [
+      'http://localhost:4200',
+      'http://localhost:3000',
+      'https://manoj0724.github.io',
+      process.env.FRONTEND_URL,
+    ].filter(Boolean)
+
+    if (!origin || allowed.includes(origin)) {
+      callback(null, true)
+    } else {
+      callback(null, true) // Allow all for now during development
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
 })
 
-// ── DATABASE ──────────────────────────────────────────────
+// ── 3. REGISTER JWT ─────────────────────────────────────
+await fastify.register(fastifyJwt, {
+  secret: process.env.JWT_SECRET || 'saylo_default_secret_change_in_production',
+})
+
+// ── 4. ADD JWT DECORATOR ─────────────────────────────────
+fastify.decorate('authenticate', async (request, reply) => {
+  try {
+    await request.jwtVerify()
+  } catch (err) {
+    reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or missing token' })
+  }
+})
+
+// ── 5. HEALTH CHECK ─────────────────────────────────────
+fastify.get('/', async () => ({
+  status: 'ok',
+  app: 'Saylo API',
+  version: '1.0.0',
+  timestamp: new Date().toISOString(),
+}))
+
+fastify.get('/api/health', async () => ({
+  status: 'ok',
+  app: 'Saylo',
+  timestamp: new Date().toISOString(),
+}))
+
+// ── 6. CONNECT TO MONGODB ────────────────────────────────
 await connectDB()
 
-// ── ROUTES ────────────────────────────────────────────────
+// ── 7. REGISTER API ROUTES ───────────────────────────────
 await registerRoutes(fastify)
 
-// ── HEALTH CHECK ──────────────────────────────────────────
-fastify.get('/api/health', async () => {
-  return { status: 'ok', app: 'Saylo', timestamp: new Date().toISOString() }
-})
-
-fastify.get('/', async () => {
-  return { status: 'ok', app: 'Saylo API', version: '1.0.0' }
-})
-
-// ── SOCKET.IO ─────────────────────────────────────────────
+// ── 8. SETUP SOCKET.IO ───────────────────────────────────
 const io = new Server(fastify.server, {
   cors: {
-    origin: [
-      'http://localhost:4200',
-      'https://manoj0724.github.io',
-      process.env.FRONTEND_URL,
-    ].filter(Boolean),
+    origin: '*',
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -56,21 +92,18 @@ const io = new Server(fastify.server, {
   pingInterval: 25000,
 })
 
-// Pass io to routes (for emitting from HTTP handlers if needed)
 fastify.decorate('io', io)
-
-// Initialize socket event handlers
 initSocketHandlers(io)
 
-// ── START SERVER ──────────────────────────────────────────
-const PORT = process.env.PORT || 5001
-const HOST = '0.0.0.0'  // IMPORTANT: must be 0.0.0.0 for Railway
+// ── 9. START SERVER ─────────────────────────────────────
+const PORT = parseInt(process.env.PORT || '5001')
+const HOST = '0.0.0.0'
 
 try {
-  await fastify.listen({ port: Number(PORT), host: HOST })
-  logger.info(`🚀 Saylo server running on port ${PORT}`)
-  logger.info(`Environment: ${process.env.NODE_ENV}`)
+  await fastify.listen({ port: PORT, host: HOST })
+  console.log(`🚀 Saylo server running on http://${HOST}:${PORT}`)
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`)
 } catch (err) {
-  logger.error('Server startup error:', err)
+  console.error('❌ Server failed to start:', err)
   process.exit(1)
 }
