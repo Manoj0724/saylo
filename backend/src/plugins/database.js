@@ -1,19 +1,20 @@
 import mongoose from 'mongoose'
 import logger from '../utils/logger.js'
 
-const connectDB = async () => {
-  const uri = process.env.MONGO_URI
-  if (!uri) throw new Error('MONGO_URI not defined in .env file')
+export const connectDB = async () => {
+  const uri =
+    process.env.MONGO_URL ||
+    process.env.MONGODB_URI ||
+    process.env.DATABASE_URL ||
+    'mongodb://localhost:27017/saylo'
 
-  mongoose.connection.on('error', (err) => logger.error('MongoDB error:', err))
-  mongoose.connection.on('disconnected', () => logger.warn('MongoDB disconnected'))
+  logger.info('Connecting to MongoDB: ' + uri.substring(0, 30) + '...')
 
-  await mongoose.connect(uri, { maxPoolSize: 10, serverSelectionTimeoutMS: 5000 })
+  await mongoose.connect(uri, {
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+    family: 4,
+  })
+
+  logger.info('✅ MongoDB connected!')
 }
-
-const disconnectDB = async () => {
-  await mongoose.disconnect()
-  logger.info('MongoDB disconnected gracefully')
-}
-
-export { connectDB, disconnectDB }

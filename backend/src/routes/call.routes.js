@@ -1,10 +1,17 @@
 import { sendSuccess, sendError } from '../utils/response.helper.js'
 import Call from '../models/Call.model.js'
 
+const auth = async (request, reply) => {
+  try {
+    await request.jwtVerify()
+  } catch {
+    reply.code(401).send({ error: 'Unauthorized' })
+  }
+}
+
 export const callRoutes = async (fastify) => {
-  // GET call history for a chat
   fastify.get('/:chatId', {
-    preHandler: [fastify.authenticate],
+    preHandler: auth,
     handler: async (request, reply) => {
       try {
         const calls = await Call.find({ chat: request.params.chatId })
