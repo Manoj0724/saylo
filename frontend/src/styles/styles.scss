@@ -1,0 +1,203 @@
+/* ═══════════════════════════════════════════════════════════
+   SAYLO — Global Styles
+   Phase 8: PWA + Mobile + Polish
+═══════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+/* ── CSS VARIABLES ───────────────────────────────────────── */
+:root {
+  --font-display: 'Syne', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+
+  /* Dark theme (default) */
+  --bg-void:       #040608;
+  --bg-deep:       #080c12;
+  --bg-surface:    #0d1117;
+  --bg-elevated:   #161b24;
+  --bg-hover:      #1c2333;
+  --bg-active:     #21283a;
+
+  --border-subtle: rgba(255,255,255,.07);
+  --border-active: rgba(108,99,255,.4);
+  --border-focus:  rgba(108,99,255,.6);
+
+  --text-primary:   #f0f4ff;
+  --text-secondary: #94a3b8;
+  --text-muted:     #4a5568;
+
+  --accent-primary:   #6C63FF;
+  --accent-secondary: #00D4FF;
+  --accent-tertiary:  #FF6B9D;
+  --accent-green:     #00E5A0;
+  --accent-red:       #FF6B6B;
+  --accent-yellow:    #FFB800;
+
+  --grad-brand:  linear-gradient(135deg, #6C63FF, #00D4FF);
+  --grad-cyber:  linear-gradient(135deg, #6C63FF, #8B5CF6);
+  --grad-warm:   linear-gradient(135deg, #FF6B9D, #FFB800);
+
+  /* Safe areas for mobile notches */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
+}
+
+/* ── RESET ───────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  height: 100%;
+  height: -webkit-fill-available;
+  overflow: hidden;
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  height: 100%;
+  height: -webkit-fill-available;
+  overflow: hidden;
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+}
+
+app-root {
+  display: flex;
+  height: 100%;
+  height: -webkit-fill-available;
+  overflow: hidden;
+}
+
+/* ── SCROLLBARS ──────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.15); }
+
+/* ── TYPOGRAPHY ──────────────────────────────────────────── */
+h1,h2,h3,h4,h5,h6 { font-family: var(--font-display); }
+
+/* ── GRADIENT TEXT ───────────────────────────────────────── */
+.gradient-text {
+  background: var(--grad-brand);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── SKELETON LOADING ────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-hover) 50%, var(--bg-elevated) 75%);
+  background-size: 200% 100%;
+  animation: skelPulse 1.4s ease infinite;
+  border-radius: 6px;
+}
+@keyframes skelPulse {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── INPUT GLOBAL RESET ──────────────────────────────────── */
+input, textarea, button {
+  font-family: var(--font-body);
+  outline: none;
+  border: none;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--bg-elevated) inset !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
+  caret-color: var(--text-primary);
+}
+
+/* ── MATERIAL OVERRIDES ──────────────────────────────────── */
+.mat-mdc-snack-bar-container {
+  --mdc-snackbar-container-color: var(--bg-elevated) !important;
+  --mdc-snackbar-supporting-text-color: var(--text-primary) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+/* ── PWA SPLASH / INSTALL PROMPT ─────────────────────────── */
+.pwa-install-banner {
+  position: fixed;
+  bottom: calc(16px + var(--safe-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 280px;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  animation: slideUp .3s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes slideUp {
+  from { transform: translateX(-50%) translateY(100px); opacity: 0; }
+  to   { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+.pwa-install-banner .pwa-icon {
+  width: 40px; height: 40px; border-radius: 10px;
+  background: var(--grad-cyber);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-weight: 800; color: #fff; font-size: 16px;
+}
+.pwa-install-banner .pwa-text { flex: 1; }
+.pwa-install-banner .pwa-text strong { display: block; font-size: 13.5px; }
+.pwa-install-banner .pwa-text span   { font-size: 11.5px; color: var(--text-muted); }
+.pwa-install-banner .pwa-btn {
+  padding: 7px 14px; background: var(--grad-brand);
+  color: #fff; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+
+/* ── MOBILE SPECIFIC ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  :root { font-size: 15px; }
+
+  /* Full height fix for mobile browsers */
+  html, body, app-root {
+    height: 100dvh !important;
+  }
+}
+
+/* ── TOUCH DEVICE OPTIMIZATIONS ──────────────────────────── */
+@media (hover: none) {
+  /* Remove hover effects on touch */
+  button:hover { opacity: 1 !important; }
+
+  /* Larger touch targets */
+  button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* ── ANIMATIONS ──────────────────────────────────────────── */
+@keyframes fadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeUp  { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes spin    { to { transform: rotate(360deg); } }
+
+.animate-in    { animation: fadeUp  .25s ease forwards; }
+.animate-scale { animation: scaleIn .2s  ease forwards; }
