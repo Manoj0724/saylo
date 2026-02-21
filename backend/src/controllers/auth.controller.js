@@ -1,94 +1,110 @@
 import User from '../models/User.model.js'
-import { sendSuccess, sendError } from '../utils/response.helper.js'
-import { validate, registerSchema, loginSchema } from '../utils/validation.js'
+import { successResponse, errorResponse } from '../utils/response.helper.js'
 import logger from '../utils/logger.js'
 
-// ─── REGISTER ────────────────────────────────────────────────
-export const register = async (request, reply) => {
-  const { valid, errors, data } = validate(registerSchema, request.body)
-  if (!valid) return sendError(reply, 'Validation failed', 422, errors)
-
+// ── REGISTER ──────────────────────────────────────────────────
+const register = async (request, reply) => {
   try {
-    const exists = await User.findOne({ email: data.email })
-    if (exists) return sendError(reply, 'Email already registered', 409)
+    const { name, email, password, phone } = request.body
 
-    const user = await User.create(data)
+    const existing = await User.findOne({ email: email.toLowerCase() })
+    if (existing) return errorResponse(reply, 'Email already registered', 409)
 
-    const token = reply.server.jwt.sign({
-      id: user._id,
-      email: user.email,
-      name: user.name,
-    })
+    const user = await User.create({ name, email, password, phone })
 
-    logger.info(`New user registered: ${user.email}`)
+    const accessToken  = request.server.jwt.sign({ id: user._id, email: user.email, name: user.name })
+    const refreshToken = request.server.jwt.sign({ id: user._id }, { expiresIn: '30d' })
 
-    return sendSuccess(
-      reply,
-      { user, token },
-      'Account created successfully',
-      201
-    )
+    user.refreshToken = refreshToken
+    await user.save({ validateBeforeSave: false })
+
+    logger.info(`New user registered: ${email}`)
+    return successResponse(reply, { user: user.toPublicProfile(), accessToken, refreshToken }, 'Account created', 201)
+
   } catch (err) {
     logger.error('Register error:', err)
-    return sendError(reply, 'Registration failed', 500)
+    return errorResponse(reply, 'Registration failed', 500)
   }
 }
 
-// ─── LOGIN ───────────────────────────────────────────────────
-export const login = async (request, reply) => {
-  const { valid, errors, data } = validate(loginSchema, request.body)
-  if (!valid) return sendError(reply, 'Validation failed', 422, errors)
-
+// ── LOGIN ─────────────────────────────────────────────────────
+const login = async (request, reply) => {
   try {
-    // We need password here, so explicitly select it
-    const user = await User.findOne({ email: data.email }).select('+password')
-    if (!user) return sendError(reply, 'Invalid email or password', 401)
+    const { email, password } = request.body
 
-    const passwordMatch = await user.comparePassword(data.password)
-    if (!passwordMatch) return sendError(reply, 'Invalid email or password', 401)
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password')
+    if (!user) return errorResponse(reply, 'Invalid email or password', 401)
+    if (!user.isActive) return errorResponse(reply, 'Account deactivated', 403)
 
-    // Update status to online
-    user.status = 'online'
+    const isValid = await user.comparePassword(password)
+    if (!isValid) return errorResponse(reply, 'Invalid email or password', 401)
+
+    user.status   = 'online'
     user.lastSeen = new Date()
-    await user.save()
 
-    const token = reply.server.jwt.sign({
-      id: user._id,
-      email: user.email,
-      name: user.name,
-    })
+    const accessToken  = request.server.jwt.sign({ id: user._id, email: user.email, name: user.name })
+    const refreshToken = request.server.jwt.sign({ id: user._id }, { expiresIn: '30d' })
 
-    logger.info(`User logged in: ${user.email}`)
+    user.refreshToken = refreshToken
+    await user.save({ validateBeforeSave: false })
 
-    return sendSuccess(reply, { user, token }, 'Login successful')
+    logger.info(`User logged in: ${email}`)
+    return successResponse(reply, { user: user.toPublicProfile(), accessToken, refreshToken }, 'Login successful')
+
   } catch (err) {
     logger.error('Login error:', err)
-    return sendError(reply, 'Login failed', 500)
+    return errorResponse(reply, 'Login failed', 500)
   }
 }
 
-// ─── GET CURRENT USER ────────────────────────────────────────
-export const getMe = async (request, reply) => {
+// ── LOGOUT ────────────────────────────────────────────────────
+const logout = async (request, reply) => {
   try {
-    const user = await User.findById(request.user.id)
-    if (!user) return sendError(reply, 'User not found', 404)
-    return sendSuccess(reply, { user }, 'User fetched successfully')
-  } catch (err) {
-    logger.error('GetMe error:', err)
-    return sendError(reply, 'Failed to fetch user', 500)
-  }
-}
-
-// ─── LOGOUT ──────────────────────────────────────────────────
-export const logout = async (request, reply) => {
-  try {
-    await User.findByIdAndUpdate(request.user.id, {
-      status: 'offline',
-      lastSeen: new Date(),
-    })
-    return sendSuccess(reply, {}, 'Logged out successfully')
+    await User.findByIdAndUpdate(request.user.id, { status: 'offline', lastSeen: new Date(), refreshToken: null })
+    logger.info(`User logged out: ${request.user.id}`)
+    return successResponse(reply, null, 'Logged out successfully')
   } catch (err) {
     logger.error('Logout error:', err)
-    return sendError(reply, 'Logout failed', 500)
+    return errorResponse(reply, 'Logout failed', 500)
   }
 }
+
+// ── REFRESH TOKEN ─────────────────────────────────────────────
+const refreshToken = async (request, reply) => {
+  try {
+    const { refreshToken: token } = request.body
+    if (!token) return errorResponse(reply, 'Refresh token required', 400)
+
+    let decoded
+    try { decoded = request.server.jwt.verify(token) }
+    catch { return errorResponse(reply, 'Invalid or expired refresh token', 401) }
+
+    const user = await User.findById(decoded.id).select('+refreshToken')
+    if (!user || user.refreshToken !== token) return errorResponse(reply, 'Invalid refresh token', 401)
+
+    const newAccessToken  = request.server.jwt.sign({ id: user._id, email: user.email, name: user.name })
+    const newRefreshToken = request.server.jwt.sign({ id: user._id }, { expiresIn: '30d' })
+
+    user.refreshToken = newRefreshToken
+    await user.save({ validateBeforeSave: false })
+
+    return successResponse(reply, { accessToken: newAccessToken, refreshToken: newRefreshToken }, 'Token refreshed')
+  } catch (err) {
+    logger.error('Refresh error:', err)
+    return errorResponse(reply, 'Token refresh failed', 500)
+  }
+}
+
+// ── GET ME ────────────────────────────────────────────────────
+const getMe = async (request, reply) => {
+  try {
+    const user = await User.findById(request.user.id)
+    if (!user) return errorResponse(reply, 'User not found', 404)
+    return successResponse(reply, { user: user.toPublicProfile() })
+  } catch (err) {
+    logger.error('GetMe error:', err)
+    return errorResponse(reply, 'Failed to get user', 500)
+  }
+}
+
+export { register, login, logout, refreshToken, getMe }
