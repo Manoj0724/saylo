@@ -1,6 +1,7 @@
-// environment.ts — Development
 export const environment = {
-  production: false,
-  apiUrl: 'http://localhost:5001/api',
-  socketUrl: 'http://localhost:5001',
+  production: true,
+  appName: 'Saylo',
+  apiUrl: 'https://saylo-production.up.railway.app/api/v1',
+  socketUrl: 'https://saylo-production.up.railway.app',
+  version: '1.0.0',
 }

@@ -1,70 +1,75 @@
-import fastifyJwt from '@fastify/jwt'
-import fastifyCors from '@fastify/cors'
-import fastifyHelmet from '@fastify/helmet'
-import fastifyRateLimit from '@fastify/rate-limit'
-import fastifyMultipart from '@fastify/multipart'
-import fastifySwagger from '@fastify/swagger'
-import fastifySwaggerUi from '@fastify/swagger-ui'
+import cors from '@fastify/cors'
+import helmet from '@fastify/helmet'
+import jwt from '@fastify/jwt'
+import rateLimit from '@fastify/rate-limit'
+import multipart from '@fastify/multipart'
+import swagger from '@fastify/swagger'
+import swaggerUI from '@fastify/swagger-ui'
 
-export const registerPlugins = async (fastify) => {
-  // Security headers
-  await fastify.register(fastifyHelmet, { contentSecurityPolicy: false })
-
-  // CORS
-  await fastify.register(fastifyCors, {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:4200',
+const registerPlugins = async (fastify) => {
+  await fastify.register(cors, {
+    origin: (origin, callback) => {
+      // Allow requests with no origin (Postman, Railway health checks, etc.)
+      if (!origin) {
+        callback(null, true)
+        return
+      }
+      // List of allowed origins
+      const allowed = [
+        'https://manoj0724.github.io', // Your GitHub Pages frontend
+        'http://localhost:4200',        // Local development
+        'http://localhost:3000',        // Local development alternative
+      ]
+      if (allowed.includes(origin)) {
+        callback(null, true)
+      } else {
+        callback(new Error(`CORS: Origin ${origin} not allowed`), false)
+      }
+    },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   })
 
-  // Rate limiting
-  await fastify.register(fastifyRateLimit, {
+  await fastify.register(helmet, { contentSecurityPolicy: false })
+
+  await fastify.register(rateLimit, {
     max: 100,
-    timeWindow: '1 minute',
-    errorResponseBuilder: () => ({
-      success: false,
-      message: 'Too many requests. Please slow down.',
-    }),
+    timeWindow: 60000,
   })
 
-  // JWT
-  await fastify.register(fastifyJwt, {
+  await fastify.register(jwt, {
     secret: process.env.JWT_SECRET,
     sign: { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
   })
 
-  // Multipart (file uploads)
-  await fastify.register(fastifyMultipart, {
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  })
+  await fastify.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } })
 
-  // Swagger API docs
-  await fastify.register(fastifySwagger, {
+  await fastify.register(swagger, {
     openapi: {
-      info: {
-        title: 'Saylo API',
-        description: 'Saylo Chat & Calling API documentation',
-        version: '1.0.0',
-      },
+      info: { title: 'Saylo API', description: 'Saylo Backend API', version: '1.0.0' },
       components: {
-        securitySchemes: {
-          bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-        },
+        securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
       },
+      tags: [
+        { name: 'Auth', description: 'Authentication' },
+        { name: 'Users', description: 'User management' },
+        { name: 'Chats', description: 'Chat management' },
+        { name: 'Messages', description: 'Messages' },
+        { name: 'Calls', description: 'Calls' },
+      ],
     },
   })
 
-  await fastify.register(fastifySwaggerUi, {
-    routePrefix: '/documentation',
-    uiConfig: { docExpansion: 'list' },
-  })
+  await fastify.register(swaggerUI, { routePrefix: '/documentation' })
 
-  // Auth decorator — call fastify.authenticate on any protected route
   fastify.decorate('authenticate', async (request, reply) => {
     try {
       await request.jwtVerify()
     } catch (err) {
-      reply.status(401).send({ success: false, message: 'Unauthorized — invalid or expired token' })
+      reply.code(401).send({ success: false, message: 'Invalid or expired token' })
     }
   })
 }
+
+export { registerPlugins }
