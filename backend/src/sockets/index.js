@@ -1,71 +1,41 @@
-import { chatSocketHandlers } from './chat.socket.js'
-import { callSocketHandlers } from './call.socket.js'
+import { handleChatSocket } from './chat.socket.js'
+import { handleCallSocket } from './call.socket.js'
+import logger from '../utils/logger.js'
 
-// Track online users: userId -> Set of socketIds
 const onlineUsers = new Map()
 
-export const initSocketHandlers = (io) => {
+const initSocketHandlers = (io) => {
+  io.on('connection', (socket) => {
+    logger.info(`🔌 Connected: ${socket.id}`)
 
-  io.on('connection', async (socket) => {
-    const userId = socket.handshake.auth?.userId
+    socket.on('user:online', (userId) => {
+      onlineUsers.set(userId, socket.id)
+      socket.userId = userId
+      io.emit('users:online-list', Array.from(onlineUsers.keys()))
+      logger.info(`👤 Online: ${userId}`)
+    })
 
-    if (!userId) {
-      console.log('[Socket] No userId — disconnecting')
-      socket.disconnect()
-      return
-    }
+    handleChatSocket(socket, io, onlineUsers)
+    handleCallSocket(socket, io, onlineUsers)
 
-    console.log(`[Socket] ✅ Connected: userId=${userId} socketId=${socket.id}`)
+    socket.on('typing:start', ({ chatId, userId, userName }) => {
+      socket.to(chatId).emit('typing:started', { userId, userName })
+    })
 
-    // ── JOIN USER ROOM ──────────────────────────────────────
-    await socket.join(`user:${userId}`)
+    socket.on('typing:stop', ({ chatId, userId }) => {
+      socket.to(chatId).emit('typing:stopped', { userId })
+    })
 
-    // ── TRACK ONLINE STATUS ────────────────────────────────
-    if (!onlineUsers.has(userId)) {
-      onlineUsers.set(userId, new Set())
-    }
-    onlineUsers.get(userId).add(socket.id)
-
-    console.log(`[Socket] Online users: ${onlineUsers.size}`)
-
-    // ── BROADCAST USER IS ONLINE ───────────────────────────
-    // Tell ALL other connected users this person is online
-    socket.broadcast.emit('user:online', { userId })
-
-    // ── SEND CURRENT ONLINE USERS TO THIS NEW CONNECTION ──
-    const onlineUserIds = Array.from(onlineUsers.keys()).filter(id => id !== userId)
-    socket.emit('users:online-list', { userIds: onlineUserIds })
-
-    // ── REGISTER CHAT AND CALL HANDLERS ───────────────────
-    chatSocketHandlers(io, socket, userId)
-    callSocketHandlers(io, socket, userId)
-
-    // ── HANDLE DISCONNECT ──────────────────────────────────
-    socket.on('disconnect', async (reason) => {
-      console.log(`[Socket] Disconnected: userId=${userId} reason=${reason}`)
-
-      // Remove this socket from user's set
-      if (onlineUsers.has(userId)) {
-        onlineUsers.get(userId).delete(socket.id)
-
-        // Only mark offline if user has NO more active sockets
-        if (onlineUsers.get(userId).size === 0) {
-          onlineUsers.delete(userId)
-          console.log(`[Socket] 🔴 User offline: ${userId}`)
-
-          // Tell ALL other users this person went offline
-          socket.broadcast.emit('user:offline', { userId })
-        }
+    socket.on('disconnect', (reason) => {
+      if (socket.userId) {
+        onlineUsers.delete(socket.userId)
+        io.emit('users:online-list', Array.from(onlineUsers.keys()))
+        logger.info(`👤 Offline: ${socket.userId} (${reason})`)
       }
     })
 
-    // ── PING / PONG for connection health ─────────────────
-    socket.on('ping', () => socket.emit('pong'))
+    socket.on('error', (error) => logger.error(`Socket error ${socket.id}:`, error))
   })
 }
 
-// Helper to check if user is online (used by call handlers)
-export const isUserOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(userId).size > 0
-
-// Helper to get all online user IDs
-export const getOnlineUsers = () => Array.from(onlineUsers.keys())
+export { initSocketHandlers, onlineUsers }
