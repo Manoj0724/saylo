@@ -21,7 +21,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       minlength: 8,
-      select: false, // never returned in queries by default
+      select: false,
+    },
+    phone: {
+      type: String,
+      default: null,
     },
     avatar: {
       type: String,
@@ -41,6 +45,10 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
     refreshToken: {
       type: String,
       default: null,
@@ -48,7 +56,7 @@ const userSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true, // createdAt, updatedAt
+    timestamps: true,
   }
 )
 
@@ -60,12 +68,28 @@ userSchema.pre('save', async function (next) {
   next()
 })
 
-// Compare password method
+// Compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password)
 }
 
-// Remove sensitive fields from JSON output
+// Public profile — safe to send to frontend
+userSchema.methods.toPublicProfile = function () {
+  return {
+    _id: this._id,
+    name: this.name,
+    email: this.email,
+    avatar: this.avatar,
+    bio: this.bio,
+    phone: this.phone,
+    status: this.status,
+    lastSeen: this.lastSeen,
+    isActive: this.isActive,
+    createdAt: this.createdAt,
+  }
+}
+
+// Remove sensitive fields from JSON
 userSchema.methods.toJSON = function () {
   const obj = this.toObject()
   delete obj.password
