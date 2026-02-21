@@ -185,7 +185,8 @@ export class RegisterComponent {
 
     const { name, email, password } = this.form.value
 
-    this.auth.register(name, email, password).subscribe({
+    this.auth.register({ name, email, password }).subscribe({
+
       next: () => {
         this.snack.open('Welcome to Saylo! 🎉', '✕')
         this.loading.set(false)
