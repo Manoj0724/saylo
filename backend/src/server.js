@@ -1,14 +1,3 @@
-// ═══════════════════════════════════════════════════════
-// SAYLO SERVER — SDD Implementation
-// SPEC:
-//   - Start Fastify server on PORT from environment
-//   - Register CORS for GitHub Pages + localhost
-//   - Connect to MongoDB before starting
-//   - Register all API routes under /api
-//   - Initialize Socket.io for real-time features
-//   - Listen on 0.0.0.0 (required for Railway)
-// ═══════════════════════════════════════════════════════
-
 import Fastify from 'fastify'
 import fastifyJwt from '@fastify/jwt'
 import cors from '@fastify/cors'
@@ -20,73 +9,43 @@ import { initSocketHandlers } from './sockets/index.js'
 
 dotenv.config()
 
-// ── 1. CREATE FASTIFY INSTANCE ──────────────────────────
-const fastify = Fastify({
-  logger: true,
-  trustProxy: true,
-})
+const fastify = Fastify({ logger: true, trustProxy: true })
 
-// ── 2. REGISTER CORS ────────────────────────────────────
+// ── CORS — allow ALL origins ─────────────────────────────
 await fastify.register(cors, {
-  origin: (origin, callback) => {
-    const allowed = [
-      'http://localhost:4200',
-      'http://localhost:3000',
-      'https://manoj0724.github.io',
-      process.env.FRONTEND_URL,
-    ].filter(Boolean)
-
-    if (!origin || allowed.includes(origin)) {
-      callback(null, true)
-    } else {
-      callback(null, true) // Allow all for now during development
-    }
-  },
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 })
 
-// ── 3. REGISTER JWT ─────────────────────────────────────
+// ── JWT ──────────────────────────────────────────────────
 await fastify.register(fastifyJwt, {
   secret: process.env.JWT_SECRET || 'saylo_default_secret_change_in_production',
 })
 
-// ── 4. ADD JWT DECORATOR ─────────────────────────────────
+// ── AUTHENTICATE DECORATOR ───────────────────────────────
 fastify.decorate('authenticate', async (request, reply) => {
   try {
     await request.jwtVerify()
   } catch (err) {
-    reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or missing token' })
+    reply.code(401).send({ error: 'Unauthorized' })
   }
 })
 
-// ── 5. HEALTH CHECK ─────────────────────────────────────
-fastify.get('/', async () => ({
-  status: 'ok',
-  app: 'Saylo API',
-  version: '1.0.0',
-  timestamp: new Date().toISOString(),
-}))
+// ── HEALTH CHECK ─────────────────────────────────────────
+fastify.get('/', async () => ({ status: 'ok', app: 'Saylo API' }))
+fastify.get('/api/health', async () => ({ status: 'ok', app: 'Saylo', timestamp: new Date().toISOString() }))
 
-fastify.get('/api/health', async () => ({
-  status: 'ok',
-  app: 'Saylo',
-  timestamp: new Date().toISOString(),
-}))
-
-// ── 6. CONNECT TO MONGODB ────────────────────────────────
+// ── MONGODB ──────────────────────────────────────────────
 await connectDB()
 
-// ── 7. REGISTER API ROUTES ───────────────────────────────
+// ── ROUTES ───────────────────────────────────────────────
 await registerRoutes(fastify)
 
-// ── 8. SETUP SOCKET.IO ───────────────────────────────────
+// ── SOCKET.IO ────────────────────────────────────────────
 const io = new Server(fastify.server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
+  cors: { origin: '*', methods: ['GET', 'POST'] },
   transports: ['polling', 'websocket'],
   pingTimeout: 60000,
   pingInterval: 25000,
@@ -95,15 +54,12 @@ const io = new Server(fastify.server, {
 fastify.decorate('io', io)
 initSocketHandlers(io)
 
-// ── 9. START SERVER ─────────────────────────────────────
+// ── START ─────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '5001')
-const HOST = '0.0.0.0'
-
 try {
-  await fastify.listen({ port: PORT, host: HOST })
-  console.log(`🚀 Saylo server running on http://${HOST}:${PORT}`)
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`)
+  await fastify.listen({ port: PORT, host: '0.0.0.0' })
+  console.log(`🚀 Saylo running on port ${PORT}`)
 } catch (err) {
-  console.error('❌ Server failed to start:', err)
+  console.error('❌ Server failed:', err)
   process.exit(1)
 }
