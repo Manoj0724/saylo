@@ -824,7 +824,7 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
   ) {}
 
   ngOnInit(): void {
-    this.socket.connect()
+    this.socket.connect(this.me()?._id)
     setTimeout(() => this.loadChats(), 400)
     this.listenSocket()
   }
@@ -950,6 +950,20 @@ setTimeout(() => {
           )
         })
       })
+      // Get initial online users when connecting
+this.socket.on<{userIds:string[]}>('users:online-list')
+  .pipe(takeUntil(this.destroy$))
+  .subscribe(({userIds}) => {
+    this.zone.run(() => {
+      this.chatSvc.chats.update(list =>
+        list.map(c => ({...c, members: c.members.map(m =>
+          userIds.includes(m.user._id)
+            ? {...m, user:{...m.user, status:'online'}}
+            : {...m, user:{...m.user, status:'offline'}}
+        )}))
+      )
+    })
+  })
   }
 
   send(): void {
