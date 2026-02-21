@@ -12,13 +12,13 @@ export const routes: Routes = [
     path: 'auth',
     canActivate: [guestGuard],
     loadChildren: () =>
-      import('./features/auth/auth.routes').then((m) => m.authRoutes),
+      import('./features/auth/auth.routes').then(m => m.authRoutes),
   },
   {
     path: 'chat',
     canActivate: [authGuard],
     loadComponent: () =>
-      import('./features/chat/chat.component').then((m) => m.ChatComponent),
+      import('./features/chat/chat.component').then(m => m.ChatComponent),
   },
   {
     path: '**',

@@ -4,95 +4,83 @@
   <meta charset="utf-8">
   <title>Saylo — Chat & Calls</title>
 
-  <!-- ── VIEWPORT (critical for mobile) ── -->
+  <!-- CRITICAL: Mobile viewport -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 
-  <!-- ── PWA / APP META ── -->
+  <!-- PWA Meta -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Saylo">
-  <meta name="application-name" content="Saylo">
   <meta name="theme-color" content="#6C63FF">
-  <meta name="msapplication-TileColor" content="#040608">
-  <meta name="msapplication-navbutton-color" content="#6C63FF">
+  <meta name="description" content="Saylo — Chat, audio and video calls">
 
-  <!-- ── SEO ── -->
-  <meta name="description" content="Saylo — Professional real-time chat, audio and video calls for teams, friends and family.">
-  <meta name="keywords" content="chat, video call, audio call, messaging, saylo">
-  <meta name="author" content="Saylo">
-
-  <!-- ── OG / SOCIAL ── -->
-  <meta property="og:title" content="Saylo — Chat & Calls">
-  <meta property="og:description" content="Professional real-time messaging and video calls">
-  <meta property="og:type" content="website">
-  <meta property="og:image" content="assets/icons/icon-512.png">
-
-  <!-- ── ICONS ── -->
+  <!-- Icons -->
   <link rel="icon" type="image/png" href="assets/icons/icon-96.png">
   <link rel="apple-touch-icon" href="assets/icons/icon-192.png">
-  <link rel="apple-touch-icon" sizes="152x152" href="assets/icons/icon-152.png">
-  <link rel="apple-touch-icon" sizes="144x144" href="assets/icons/icon-144.png">
-  <link rel="apple-touch-icon" sizes="128x128" href="assets/icons/icon-128.png">
-
-  <!-- ── PWA MANIFEST ── -->
   <link rel="manifest" href="manifest.json">
 
-  <!-- ── SPLASH SCREENS (iOS) ── -->
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-
-  <!-- ── FONTS PRECONNECT ── -->
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
-  <base href="/">
+  <!-- IMPORTANT: base href for GitHub Pages -->
+  <base href="/saylo/">
+
+  <style>
+    body { background: #040608; margin: 0; overflow: hidden; }
+  </style>
 </head>
 <body>
   <app-root></app-root>
 
-  <!-- ── SERVICE WORKER REGISTRATION ── -->
   <script>
+    // Fix mobile viewport height (Android Chrome 100vh bug)
+    function setVH() {
+      const vh = window.innerHeight * 0.01
+      document.documentElement.style.setProperty('--vh', `${vh}px`)
+    }
+    setVH()
+    window.addEventListener('resize', setVH)
+    window.addEventListener('orientationchange', () => setTimeout(setVH, 200))
+
+    // Service Worker registration
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-          .then(reg => console.log('[SW] Registered:', reg.scope))
-          .catch(err => console.warn('[SW] Registration failed:', err))
+        navigator.serviceWorker.register('/saylo/sw.js')
+          .then(() => console.log('[SW] Registered'))
+          .catch(e => console.warn('[SW] Failed:', e))
       })
     }
 
-    // PWA Install prompt
+    // PWA install banner
     let deferredPrompt = null
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault()
       deferredPrompt = e
-      showInstallBanner()
+      if (!window.matchMedia('(display-mode: standalone)').matches) {
+        setTimeout(showBanner, 3000)
+      }
     })
 
-    function showInstallBanner() {
-      // Only show if not already installed
-      if (window.matchMedia('(display-mode: standalone)').matches) return
-      const banner = document.createElement('div')
-      banner.className = 'pwa-install-banner'
-      banner.innerHTML = `
+    function showBanner() {
+      const b = document.createElement('div')
+      b.className = 'pwa-install-banner'
+      b.innerHTML = `
         <div class="pwa-icon">S</div>
         <div class="pwa-text">
           <strong>Install Saylo</strong>
-          <span>Add to home screen for the best experience</span>
+          <span>Add to home screen</span>
         </div>
-        <button class="pwa-btn" id="pwa-install">Install</button>
-        <button style="background:none;border:none;cursor:pointer;color:#666;font-size:18px;padding:0 4px" id="pwa-dismiss">✕</button>
+        <button class="pwa-btn" onclick="installApp()">Install</button>
+        <button style="background:none;border:none;color:#666;font-size:20px;cursor:pointer;min-height:unset;padding:4px" onclick="this.closest('.pwa-install-banner').remove()">✕</button>
       `
-      document.body.appendChild(banner)
-      document.getElementById('pwa-install').onclick = async () => {
-        if (deferredPrompt) {
-          deferredPrompt.prompt()
-          const result = await deferredPrompt.userChoice
-          console.log('[PWA] Install result:', result.outcome)
-          deferredPrompt = null
-        }
-        banner.remove()
-      }
-      document.getElementById('pwa-dismiss').onclick = () => banner.remove()
+      document.body.appendChild(b)
+    }
+
+    function installApp() {
+      if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null }
+      document.querySelector('.pwa-install-banner')?.remove()
     }
   </script>
 </body>

@@ -1,161 +1,85 @@
-import { Injectable } from '@angular/core'
-import { io, Socket } from 'socket.io-client'
+import { Injectable, signal, NgZone } from '@angular/core'
 import { Observable, Subject } from 'rxjs'
+import { io, Socket } from 'socket.io-client'
 import { environment } from '../../../environments/environment'
-import { AuthService } from './auth.service'
 
 @Injectable({ providedIn: 'root' })
 export class SocketService {
-  private socket!: Socket
-  private eventBuffer: Map<string, Subject<any>> = new Map()
+  private socket: Socket | null = null
+  private eventBuffer = new Map<string, Subject<any>>()
+  isConnected = signal(false)
 
-  constructor(private auth: AuthService) {}
+  constructor(private zone: NgZone) {}
 
-  connect(): void {
+  connect(userId?: string): void {
     if (this.socket?.connected) return
-
-    const userId = this.auth.getUserId()
-    if (!userId) {
-      console.warn('[Socket] No userId — cannot connect')
-      return
-    }
-
-    console.log('[Socket] Connecting with userId:', userId)
-
+    console.log('[Socket] Connecting userId:', userId)
     this.socket = io(environment.socketUrl, {
-      query: { userId },
-      transports: ['polling', 'websocket'],  // start with polling, upgrade to ws
+      auth: { userId },
+      transports: ['polling', 'websocket'],
+      upgrade: true,
       reconnection: true,
       reconnectionAttempts: 20,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 3000,
-      timeout: 20000,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 30000,
       forceNew: true,
+      withCredentials: true,
     })
-
     this.socket.on('connect', () => {
-      console.log('[Socket] ✅ Connected:', this.socket.id)
-      // Flush any buffered event listeners
+      console.log('[Socket] ✅ Connected:', this.socket?.id)
+      this.zone.run(() => this.isConnected.set(true))
       this.eventBuffer.forEach((subject, event) => {
-        this.socket.on(event, (data: any) => subject.next(data))
+        this.socket!.on(event, (data: any) => {
+          this.zone.run(() => subject.next(data))
+        })
       })
     })
-
     this.socket.on('disconnect', (reason) => {
-      console.warn('[Socket] Disconnected:', reason)
-      if (reason === 'io server disconnect') {
-        // Server kicked us — reconnect manually
-        setTimeout(() => this.socket.connect(), 1000)
-      }
+      console.log('[Socket] Disconnected:', reason)
+      this.zone.run(() => this.isConnected.set(false))
     })
-
     this.socket.on('connect_error', (err) => {
-      console.error('[Socket] Connection error:', err.message)
+      console.error('[Socket] Error:', err.message)
     })
   }
 
-  disconnect(): void {
-    this.socket?.disconnect()
-  }
-
-  // Generic typed event listener
   on<T>(event: string): Observable<T> {
-    // If socket not ready yet, buffer the subject and attach when connected
-    if (!this.socket) {
-      if (!this.eventBuffer.has(event)) {
-        this.eventBuffer.set(event, new Subject<T>())
-      }
-      return this.eventBuffer.get(event)!.asObservable()
+    if (!this.eventBuffer.has(event)) {
+      this.eventBuffer.set(event, new Subject<T>())
     }
-
-    return new Observable(observer => {
-      const handler = (data: T) => observer.next(data)
-      this.socket.on(event, handler)
-      return () => {
-        this.socket?.off(event, handler)
-      }
-    })
+    const subject = this.eventBuffer.get(event)!
+    if (this.socket?.connected) {
+      this.socket.on(event, (data: T) => {
+        this.zone.run(() => subject.next(data))
+      })
+    }
+    return subject.asObservable()
   }
 
   emit(event: string, data?: any): void {
-    if (!this.socket?.connected) {
-      console.warn('[Socket] Not connected — cannot emit:', event)
-      return
+    if (this.socket?.connected) {
+      this.socket.emit(event, data)
+    } else {
+      console.warn('[Socket] Not connected, cannot emit:', event)
     }
-    this.socket.emit(event, data)
   }
 
-  get connected(): boolean {
-    return this.socket?.connected ?? false
-  }
-
-  // ── CHAT ─────────────────────────────────────────────────
-  joinChat(chatId: string): void {
-    console.log('[Socket] Joining chat:', chatId)
-    this.emit('chat:join', { chatId })
-  }
-
-  leaveChat(chatId: string): void {
-    this.emit('chat:leave', { chatId })
-  }
-
-  sendMessage(chatId: string, content: string, type = 'text', replyTo: string | null = null): void {
-    this.emit('message:send', { chatId, content, type, replyTo })
-  }
-
-  sendTypingStart(chatId: string): void {
-    this.emit('typing:start', { chatId })
-  }
-
-  sendTypingStop(chatId: string): void {
-    this.emit('typing:stop', { chatId })
-  }
-
-  markRead(chatId: string, messageIds: string[]): void {
-    this.emit('message:read', { chatId, messageIds })
-  }
-
-  reactToMessage(messageId: string, chatId: string, emoji: string): void {
-    this.emit('message:react', { messageId, chatId, emoji })
-  }
-
-  // ── CALLS ────────────────────────────────────────────────
-  initiateCall(chatId: string, targetUserId: string, type: 'audio' | 'video'): void {
-    console.log('[Socket] call:initiate →', { chatId, targetUserId, type })
-    this.emit('call:initiate', { chatId, targetUserId, type })
-  }
-
-  answerCall(callId: string): void {
-    console.log('[Socket] call:answer →', callId)
-    this.emit('call:answer', { callId })
-  }
-
-  declineCall(callId: string): void {
-    console.log('[Socket] call:decline →', callId)
-    this.emit('call:decline', { callId })
-  }
-
-  endCall(callId: string): void {
-    console.log('[Socket] call:end →', callId)
-    this.emit('call:end', { callId })
-  }
-
-  // ── WebRTC ────────────────────────────────────────────────
-  sendOffer(callId: string, offer: RTCSessionDescriptionInit, targetUserId: string): void {
-    console.log('[Socket] webrtc:offer → ', targetUserId)
-    this.emit('webrtc:offer', { callId, offer, targetUserId })
-  }
-
-  sendAnswer(callId: string, answer: RTCSessionDescriptionInit, targetUserId: string): void {
-    console.log('[Socket] webrtc:answer →', targetUserId)
-    this.emit('webrtc:answer', { callId, answer, targetUserId })
-  }
-
-  sendIceCandidate(callId: string, candidate: RTCIceCandidate, targetUserId: string): void {
-    this.emit('webrtc:ice-candidate', { callId, candidate, targetUserId })
-  }
-
-  getUserId(): string | null {
-    return this.auth.getUserId()
-  }
+  joinChat(chatId: string): void { this.emit('chat:join', { chatId }); console.log('[Socket] Joining chat:', chatId) }
+  leaveChat(chatId: string): void { this.emit('chat:leave', { chatId }) }
+  sendMessage(chatId: string, content: string, type?: string, replyTo?: string | null): void { this.emit('message:send', { chatId, content, type: type || 'text', replyTo }) }
+  sendTypingStart(chatId: string): void { this.emit('typing', { chatId, isTyping: true }) }
+  sendTypingStop(chatId: string): void { this.emit('typing', { chatId, isTyping: false }) }
+  sendTyping(chatId: string, isTyping: boolean): void { this.emit('typing', { chatId, isTyping }) }
+  markRead(chatId: string, messageIds: string | string[]): void { this.emit('message:read', { chatId, messageIds: Array.isArray(messageIds) ? messageIds : [messageIds] }) }
+  reactToMessage(messageId: string, chatId: string, emoji: string): void { this.emit('message:react', { messageId, emoji, chatId }) }
+  addReaction(messageId: string, emoji: string, chatId: string): void { this.emit('message:react', { messageId, emoji, chatId }) }
+  initiateCall(chatId: string, targetUserId: string, type: string): void { this.emit('call:initiate', { chatId, targetUserId, type }); console.log('[Socket] call:initiate →', { chatId, targetUserId, type }) }
+  answerCall(callId: string): void { this.emit('call:answer', { callId }) }
+  declineCall(callId: string): void { this.emit('call:decline', { callId }) }
+  endCall(callId: string): void { this.emit('call:end', { callId }) }
+  sendOffer(callId: string, offer: RTCSessionDescriptionInit, targetUserId: string): void { this.emit('webrtc:offer', { callId, offer, targetUserId }); console.log('[Socket] webrtc:offer → ', targetUserId) }
+  sendAnswer(callId: string, answer: RTCSessionDescriptionInit, targetUserId: string): void { this.emit('webrtc:answer', { callId, answer, targetUserId }) }
+  sendIceCandidate(callId: string, candidate: RTCIceCandidate, targetUserId: string): void { this.emit('webrtc:ice-candidate', { callId, candidate, targetUserId }) }
+  disconnect(): void { this.socket?.disconnect(); this.socket = null; this.isConnected.set(false); this.eventBuffer.clear() }
 }
