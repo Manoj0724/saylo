@@ -1,1059 +1,1193 @@
 import {
-  Component, OnInit, OnDestroy,
-  ViewChild, ElementRef, AfterViewChecked,
+  Component, OnInit, OnDestroy, signal, computed,
+  ViewChild, ElementRef, AfterViewChecked, HostListener, NgZone
 } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { Subject, takeUntil } from 'rxjs'
-import { AuthService, User } from '../../core/services/auth.service'
+import { AuthService } from '../../core/services/auth.service'
 import { SocketService } from '../../core/services/socket.service'
 import { ChatService, Chat, Message } from '../../core/services/chat.service'
+import { CallService } from '../../core/services/call.service'
+import { CallComponent } from '../call/call.component'
+import { TimeAgoPipe } from '../../shared/pipes/time-ago.pipe'
+import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar'
 
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, TimeAgoPipe, MatSnackBarModule, CallComponent],
   template: `
 <div class="shell">
 
-  <!-- ════════════════ SIDEBAR ════════════════ -->
-  <aside class="sidebar" [class.open]="sidebarOpen">
-
-    <!-- Sidebar Top Bar -->
-    <div class="sb-topbar">
-      <div class="sb-logo">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="#2563eb"/>
-          <circle cx="8"  cy="11" r="1" fill="white"/>
-          <circle cx="12" cy="11" r="1" fill="white"/>
-          <circle cx="16" cy="11" r="1" fill="white"/>
-        </svg>
-        <span>Saylo</span>
+  <!-- SIDEBAR -->
+  <aside class="sidebar" [class.hidden]="activeChat()&&mobile()">
+    <div class="sb-head">
+      <div class="sb-brand">
+        <div class="brand-logo">S</div>
+        <span class="brand-name">Saylo</span>
       </div>
-      <button class="icon-btn" title="New chat" (click)="openNewChatModal()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-      </button>
-    </div>
-
-    <!-- Search Bar -->
-    <div class="sb-search-wrap">
-      <div class="sb-search">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input
-          class="sb-search-input"
-          type="text"
-          [(ngModel)]="searchQ"
-          placeholder="Search chats..."
-        />
+      <div class="sb-actions">
+        <button class="icon-btn" (click)="showPeople.set(true)" title="New chat">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+        </button>
+        <button class="icon-btn" (click)="logout()" title="Logout">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+        </button>
       </div>
     </div>
 
-    <!-- Tabs -->
-    <div class="sb-tabs">
-      <button class="sb-tab" [class.active]="tab==='chats'"  (click)="tab='chats'">Chats</button>
-      <button class="sb-tab" [class.active]="tab==='people'" (click)="switchToPeople()">People</button>
+    <!-- User profile strip -->
+    <div class="my-profile">
+      <div class="my-av" [style.background]="avatarColor(me()?.name||'U')">{{initials(me()?.name||'U')}}</div>
+      <div class="my-info">
+        <span class="my-name">{{me()?.name}}</span>
+        <span class="my-status">🟢 Active</span>
+      </div>
     </div>
 
-    <!-- ── CHATS LIST ── -->
-    <div class="sb-list" *ngIf="tab==='chats'">
-      <div class="empty-hint" *ngIf="filteredChats.length === 0">
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-        <p>No conversations yet</p>
-        <span>Tap + to start one</span>
+    <div class="sb-search">
+      <div class="search-box">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="M21 21l-4.35-4.35"/></svg>
+        <input placeholder="Search conversations..." [(ngModel)]="sq">
+        @if(sq){<button class="clr-btn" (click)="sq=''">✕</button>}
       </div>
+    </div>
 
-      <div
-        class="chat-row"
-        *ngFor="let c of filteredChats"
-        [class.active]="activeChat?._id === c._id"
-        (click)="openChat(c)"
-      >
-        <div class="avatar" [style.background]="colorFor(getChatName(c))">
-          {{ getChatName(c).charAt(0).toUpperCase() }}
-          <div class="green-dot" *ngIf="isOnline(c)"></div>
+    <!-- People panel -->
+    @if(showPeople()){
+      <div class="people-panel">
+        <div class="pp-head">
+          <span>New Conversation</span>
+          <button class="icon-btn sm" (click)="showPeople.set(false);pq='';people.set([])">✕</button>
         </div>
-        <div class="chat-row-info">
-          <div class="chat-row-top">
-            <span class="chat-row-name">{{ getChatName(c) }}</span>
-            <span class="chat-row-time">{{ ago(c.lastActivity) }}</span>
+        <div class="pp-search">
+          <input class="pp-input" placeholder="Search by name or email..." [(ngModel)]="pq" (ngModelChange)="findPeople($event)" autofocus>
+        </div>
+        @if(searching()){
+          <div class="pp-loading"><div class="spin"></div></div>
+        }
+        @for(u of people();track u._id){
+          <div class="pp-user" (click)="openChat(u._id, u.name)">
+            <div class="pp-av" [style.background]="avatarColor(u.name)">{{initials(u.name)}}</div>
+            <div class="pp-info">
+              <span class="pp-name">{{u.name}}</span>
+              <span class="pp-email">{{u.email}}</span>
+            </div>
+            <div class="pp-status-dot" [class.online]="u.status==='online'"></div>
           </div>
-          <div class="chat-row-top">
-            <span class="chat-row-preview">{{ c.lastMessageText || 'Start a conversation' }}</span>
-            <span class="unread-dot" *ngIf="c.unread && c.unread > 0">{{ c.unread }}</span>
-          </div>
-        </div>
+        }
+        @if(!searching()&&pq&&people().length===0){
+          <div class="pp-empty">No users found for "{{pq}}"</div>
+        }
+        @if(!pq){
+          <div class="pp-hint">Type a name or email to search</div>
+        }
       </div>
-    </div>
+    }
 
-    <!-- ── PEOPLE LIST ── -->
-    <div class="sb-list" *ngIf="tab==='people'">
-      <div class="loading-row" *ngIf="loadingPeople">
-        <div class="mini-spin"></div> Loading...
-      </div>
-      <div class="empty-hint" *ngIf="!loadingPeople && filteredPeople.length === 0">
-        <p>No users found</p>
-      </div>
-      <div
-        class="chat-row"
-        *ngFor="let u of filteredPeople"
-        (click)="startChat(u)"
-      >
-        <div class="avatar" [style.background]="colorFor(u.name)">
-          {{ u.name.charAt(0).toUpperCase() }}
-          <div class="green-dot" *ngIf="onlineIds.includes(u._id)"></div>
-        </div>
-        <div class="chat-row-info">
-          <div class="chat-row-top">
-            <span class="chat-row-name">{{ u.name }}</span>
-            <span class="chat-row-time" *ngIf="onlineIds.includes(u._id)" style="color:#22c55e">Online</span>
+    <div class="sb-list">
+      @if(loading()){
+        @for(i of [1,2,3,4];track i){
+          <div class="ske-item">
+            <div class="ske-av skeleton"></div>
+            <div class="ske-body">
+              <div class="skeleton" style="height:11px;width:50%;border-radius:6px"></div>
+              <div class="skeleton" style="height:10px;width:75%;border-radius:6px;margin-top:6px"></div>
+            </div>
           </div>
-          <span class="chat-row-preview">{{ u.email }}</span>
+        }
+      } @else if(filteredChats().length===0){
+        <div class="sb-empty">
+          <div class="empty-icon">💬</div>
+          <p>No conversations yet</p>
+          <button class="start-btn" (click)="showPeople.set(true)">Start chatting</button>
         </div>
-      </div>
-    </div>
-
-    <!-- Sidebar Footer -->
-    <div class="sb-footer">
-      <div class="sb-profile">
-        <div class="avatar sm" [style.background]="colorFor(me?.name||'')">
-          {{ me?.name?.charAt(0)?.toUpperCase() }}
-          <div class="green-dot"></div>
-        </div>
-        <div>
-          <div class="sb-profile-name">{{ me?.name }}</div>
-          <div class="sb-profile-status">Online</div>
-        </div>
-      </div>
-      <button class="icon-btn red-hover" title="Sign out" (click)="logout()">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-          <polyline points="16 17 21 12 16 7"/>
-          <line x1="21" y1="12" x2="9" y2="12"/>
-        </svg>
-      </button>
+      } @else {
+        @for(c of filteredChats();track c._id){
+          <div class="ci" [class.active]="activeChat()?._id===c._id" (click)="pick(c)">
+            <div class="ci-av" [style.background]="avatarColor(chatName(c))">
+              {{initials(chatName(c))}}
+              <span class="ci-dot" [class.online]="chatStatus(c)==='online'"></span>
+            </div>
+            <div class="ci-body">
+              <div class="ci-top">
+                <span class="ci-name">{{chatName(c)}}</span>
+                <span class="ci-time">{{c.lastMessage?.createdAt|timeAgo}}</span>
+              </div>
+              <div class="ci-bottom">
+                <span class="ci-preview" [class.unread]="hasUnread(c)">
+                  @if(isTypingIn(c._id)){<em>typing...</em>}
+                  @else{{{preview(c)}}}
+                </span>
+                @if(hasUnread(c)){<span class="ci-badge">{{c.unreadCount}}</span>}
+              </div>
+            </div>
+          </div>
+        }
+      }
     </div>
   </aside>
 
-  <!-- ════════════════ MAIN ════════════════ -->
-  <main class="main">
-
-    <!-- Mobile top bar -->
-    <div class="mobile-topbar">
-      <button class="icon-btn" (click)="sidebarOpen = !sidebarOpen">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <line x1="3" y1="6"  x2="21" y2="6"/>
-          <line x1="3" y1="12" x2="21" y2="12"/>
-          <line x1="3" y1="18" x2="21" y2="18"/>
-        </svg>
-      </button>
-      <span>{{ activeChat ? getChatName(activeChat) : 'Saylo' }}</span>
-    </div>
-
-    <!-- ── EMPTY STATE (no chat selected) ── -->
-    <div class="no-chat" *ngIf="!activeChat">
-      <div class="no-chat-box">
-        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-        <h3>Pick a conversation</h3>
-        <p>Select a chat from the sidebar or start a new one</p>
-        <button class="start-btn" (click)="openNewChatModal()">
-          Start a conversation
+  <!-- MAIN -->
+  <main class="main" [class.show]="activeChat()||!mobile()">
+    @if(!activeChat()){
+      <div class="welcome">
+        <div class="welcome-art">
+          <div class="w-circle c1"></div>
+          <div class="w-circle c2"></div>
+          <div class="w-logo">S</div>
+        </div>
+        <h2>Welcome to Saylo</h2>
+        <p>Select a conversation or start a new one</p>
+        <button class="start-btn" (click)="showPeople.set(true)">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+          New Conversation
         </button>
       </div>
-    </div>
+    } @else {
 
-    <!-- ── ACTIVE CHAT ── -->
-    <div class="chat-view" *ngIf="activeChat">
+      <!-- HEADER -->
+      <header class="chat-header">
+        @if(mobile()){
+          <button class="icon-btn" (click)="chatSvc.activeChat.set(null)">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          </button>
+        }
+        <div class="header-av" [style.background]="avatarColor(chatName(activeChat()!))">
+          {{initials(chatName(activeChat()!))}}
+        </div>
+        <div class="header-info">
+          <div class="header-name">{{chatName(activeChat()!)}}</div>
+          <div class="header-status">
+            @if(isTypingIn(activeChat()!._id)){
+              <span class="typing-status">
+                <span class="td"></span><span class="td"></span><span class="td"></span>
+                typing...
+              </span>
+            } @else {
+              <span class="status-dot" [class.online]="chatStatus(activeChat()!)==='online'"></span>
+              {{chatStatusTxt(activeChat()!)}}
+            }
+          </div>
+        </div>
 
-      <!-- Chat Header -->
-      <div class="chat-header">
-        <button class="icon-btn back-btn" (click)="activeChat=null; sidebarOpen=true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <polyline points="15 18 9 12 15 6"/>
+        <!-- CALL BUTTONS -->
+        <div class="header-calls">
+          <button class="call-btn audio" title="Audio Call" (click)="callAudio()">
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+            </svg>
+          </button>
+          <button class="call-btn video" title="Video Call" (click)="callVideo()">
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- MESSAGES -->
+      <div class="msgs" #msgsEl (scroll)="onScroll($event)">
+        @if(loadingMsgs()){
+          <div class="msgs-load"><div class="spin"></div></div>
+        }
+        @for(g of msgGroups();track g.date){
+          <div class="date-sep"><span>{{g.date}}</span></div>
+          @for(m of g.messages;track m._id){
+            <div class="msg-row" [class.out]="isOut(m)">
+              @if(!isOut(m)){
+                <div class="msg-av" [style.background]="avatarColor(m.sender.name)">{{initials(m.sender.name)}}</div>
+              }
+              <div class="msg-wrap">
+                @if(m.replyTo){
+                  <div class="reply-preview" [class.out]="isOut(m)">
+                    <span class="reply-name">{{m.replyTo.sender?.name}}</span>
+                    <span class="reply-text">{{m.replyTo.content|slice:0:60}}</span>
+                  </div>
+                }
+                <div class="bubble" [class.out]="isOut(m)" [class.inc]="!isOut(m)" [class.deleted]="m.isDeleted" (dblclick)="setReply(m)">
+                  @if(m.isDeleted){
+                    <span class="deleted-text">🚫 Message deleted</span>
+                  } @else {
+                    <span class="bubble-text">{{m.content}}</span>
+                  }
+                  <div class="bubble-meta">
+                    <span class="msg-time">{{fmtTime(m.createdAt)}}</span>
+                    @if(isOut(m)){
+                      <span class="read-tick" [class.read]="isRead(m)">
+                        <svg width="16" height="10" viewBox="0 0 16 10" fill="none">
+                          <path d="M1 5L5 9L15 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                          @if(isRead(m)){<path d="M6 5L10 9L15 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".7"/>}
+                        </svg>
+                      </span>
+                    }
+                  </div>
+                </div>
+                @if(m.reactions.length>0){
+                  <div class="reactions" [class.out]="isOut(m)">
+                    @for(r of groupReacts(m);track r.emoji){
+                      <button class="react-pill" (click)="react(m, r.emoji)">{{r.emoji}} {{r.count}}</button>
+                    }
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        }
+        @if(isTypingIn(activeChat()!._id)){
+          <div class="msg-row">
+            <div class="msg-av" style="background:#E8E1D9">💬</div>
+            <div class="typing-bubble">
+              <span class="td"></span><span class="td"></span><span class="td"></span>
+            </div>
+          </div>
+        }
+        <div #anchor></div>
+      </div>
+
+      <!-- REPLY STRIP -->
+      @if(replyTo()){
+        <div class="reply-strip">
+          <div class="reply-bar"></div>
+          <div class="reply-strip-info">
+            <span class="reply-strip-name">↩ {{replyTo()!.sender.name}}</span>
+            <span class="reply-strip-text">{{replyTo()!.content|slice:0:80}}</span>
+          </div>
+          <button class="icon-btn sm" (click)="replyTo.set(null)">✕</button>
+        </div>
+      }
+
+      <!-- INPUT -->
+      <div class="input-bar">
+        <div class="input-wrap" [class.focused]="inpFocus()">
+          <button class="inp-icon-btn" title="Attach">
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+          </button>
+          <input
+            #msgInp
+            class="msg-input"
+            type="text"
+            [placeholder]="'Message ' + chatName(activeChat()!) + '...'"
+            [(ngModel)]="txt"
+            (ngModelChange)="onType()"
+            (keydown.enter)="send()"
+            (focus)="inpFocus.set(true)"
+            (blur)="inpFocus.set(false); stopType()"
+          >
+          <button class="inp-icon-btn" title="Emoji">😊</button>
+        </div>
+        <button class="send-btn" [class.active]="txt.trim()" (click)="send()">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
           </svg>
         </button>
-
-        <div class="avatar" [style.background]="colorFor(getChatName(activeChat))">
-          {{ getChatName(activeChat).charAt(0).toUpperCase() }}
-          <div class="green-dot" *ngIf="isOnline(activeChat)"></div>
-        </div>
-
-        <div class="header-info">
-          <span class="header-name">{{ getChatName(activeChat) }}</span>
-          <span class="header-status">
-            <ng-container *ngIf="typingUsers.length > 0">
-              <span class="typing-label">typing...</span>
-            </ng-container>
-            <ng-container *ngIf="typingUsers.length === 0">
-              <span *ngIf="isOnline(activeChat)"  class="online-label">Online</span>
-              <span *ngIf="!isOnline(activeChat)" class="offline-label">Offline</span>
-            </ng-container>
-          </span>
-        </div>
-
-        <div class="header-actions">
-          <button class="icon-btn" title="Voice call (Phase 6)">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-            </svg>
-          </button>
-          <button class="icon-btn" title="Video call (Phase 6)">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <polygon points="23 7 16 12 23 17 23 7"/>
-              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-            </svg>
-          </button>
-        </div>
       </div>
-
-      <!-- Messages -->
-      <div class="msgs-area" #scrollEl>
-        <div class="msgs-inner">
-
-          <!-- Loading -->
-          <div class="msgs-loading" *ngIf="loadingMsgs">
-            <div class="mini-spin"></div>
-          </div>
-
-          <!-- Empty chat -->
-          <div class="msgs-empty" *ngIf="!loadingMsgs && messages.length === 0">
-            <p>No messages yet — say hello! 👋</p>
-          </div>
-
-          <!-- Message bubbles -->
-          <ng-container *ngFor="let msg of messages; let i = index">
-
-            <!-- Date separator -->
-            <div class="date-sep" *ngIf="showDateSep(i)">
-              <span>{{ formatDate(msg.createdAt) }}</span>
-            </div>
-
-            <!-- Bubble row -->
-            <div class="bubble-row" [class.mine]="isMine(msg)">
-              <!-- Other person avatar -->
-              <div
-                class="avatar xs"
-                *ngIf="!isMine(msg)"
-                [style.background]="colorFor(msg.sender?.name || '')"
-              >
-                {{ (msg.sender?.name || 'U').charAt(0).toUpperCase() }}
-              </div>
-
-              <div class="bubble-wrap">
-                <!-- Sender name in group chats -->
-                <span
-                  class="sender-name"
-                  *ngIf="activeChat.type==='group' && !isMine(msg)"
-                >{{ msg.sender?.name }}</span>
-
-                <div class="bubble" [class.mine-bubble]="isMine(msg)" [class.deleted]="msg.isDeleted">
-                  {{ msg.content }}
-                </div>
-
-                <div class="bubble-meta" [class.mine-meta]="isMine(msg)">
-                  <span class="msg-time">{{ formatTime(msg.createdAt) }}</span>
-                  <!-- Read tick for sent messages -->
-                  <svg *ngIf="isMine(msg)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2.5" stroke-linecap="round">
-                    <polyline points="20 6 9 17 4 12"/>
-                  </svg>
-                </div>
-              </div>
-            </div>
-          </ng-container>
-
-          <!-- Typing indicator -->
-          <div class="bubble-row" *ngIf="typingUsers.length > 0">
-            <div class="avatar xs" style="background:#2563eb">...</div>
-            <div class="bubble-wrap">
-              <div class="bubble typing-bubble">
-                <span></span><span></span><span></span>
-              </div>
-            </div>
-          </div>
-
-          <div #anchor></div>
-        </div>
-      </div>
-
-      <!-- Message Input -->
-      <div class="input-area">
-        <div class="input-row">
-          <div class="input-box" [class.focused]="inputFocused">
-            <input
-              class="msg-input"
-              type="text"
-              [(ngModel)]="msgText"
-              (keydown.enter)="send()"
-              (input)="onTyping()"
-              (focus)="inputFocused=true"
-              (blur)="inputFocused=false"
-              placeholder="Type a message..."
-              [disabled]="sending"
-              #inputEl
-            />
-          </div>
-          <button
-            class="send-btn"
-            (click)="send()"
-            [disabled]="!msgText.trim() || sending"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-    </div>
+    }
   </main>
 
-  <!-- ════════════════ NEW CHAT MODAL ════════════════ -->
-  <div class="backdrop" *ngIf="showModal" (click)="showModal=false">
-    <div class="modal" (click)="$event.stopPropagation()">
-
-      <div class="modal-head">
-        <h3>New Conversation</h3>
-        <button class="icon-btn" (click)="showModal=false">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="modal-search">
-        <div class="sb-search">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input
-            class="sb-search-input"
-            type="text"
-            [(ngModel)]="modalSearch"
-            placeholder="Search by name or email..."
-          />
-        </div>
-      </div>
-
-      <div class="modal-list">
-        <div class="loading-row" *ngIf="loadingPeople">
-          <div class="mini-spin"></div> Loading people...
-        </div>
-        <div
-          class="chat-row"
-          *ngFor="let u of filteredModalPeople"
-          (click)="startChat(u); showModal=false"
-        >
-          <div class="avatar" [style.background]="colorFor(u.name)">
-            {{ u.name.charAt(0).toUpperCase() }}
-            <div class="green-dot" *ngIf="onlineIds.includes(u._id)"></div>
-          </div>
-          <div class="chat-row-info">
-            <span class="chat-row-name">{{ u.name }}</span>
-            <span class="chat-row-preview">{{ u.email }}</span>
-          </div>
-        </div>
-        <div class="empty-hint sm" *ngIf="!loadingPeople && filteredModalPeople.length === 0">
-          <p>No users found</p>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Mobile overlay to close sidebar -->
-  <div class="sb-overlay" *ngIf="sidebarOpen" (click)="sidebarOpen=false"></div>
+  <app-call/>
 </div>
   `,
   styles: [`
+    :host { display:flex; height:100vh; overflow:hidden; }
 
-/* ══ SHELL ═══════════════════════════════════════ */
-.shell {
-  display: flex;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--bg-0);
-  position: relative;
-}
+    .shell {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg-primary);
+      font-family: var(--font-body);
+    }
 
-/* ══ SIDEBAR ═════════════════════════════════════ */
-.sidebar {
-  width: 300px;
-  flex-shrink: 0;
-  background: var(--bg-1);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  z-index: 10;
-}
-@media (max-width: 768px) {
-  .sidebar {
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 80%;
-    max-width: 300px;
-    transform: translateX(-100%);
-    transition: transform 260ms ease;
-    box-shadow: 4px 0 40px rgba(0,0,0,0.5);
-  }
-  .sidebar.open { transform: translateX(0); }
-}
+    /* ── SIDEBAR ── */
+    .sidebar {
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-light);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+    }
 
-/* Sidebar top bar */
-.sb-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 14px 10px;
-  flex-shrink: 0;
-}
-.sb-logo {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 17px;
-  font-weight: 800;
-  color: var(--t1);
-  letter-spacing: -0.3px;
-}
+    .sb-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid var(--border-light);
+    }
 
-/* Search */
-.sb-search-wrap { padding: 0 10px 8px; flex-shrink: 0; }
-.sb-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--bg-3);
-  border: 1.5px solid var(--border);
-  border-radius: 10px;
-  padding: 0 12px;
-  height: 36px;
-  transition: border-color 160ms;
-}
-.sb-search:focus-within { border-color: rgba(37,99,235,0.5); }
-.sb-search svg { color: var(--t3); flex-shrink: 0; }
-.sb-search-input {
-  flex: 1; background: none; border: none; outline: none;
-  color: var(--t1); font-size: 13px;
-}
-.sb-search-input::placeholder { color: var(--t3); }
+    .sb-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
-/* Tabs */
-.sb-tabs {
-  display: flex;
-  padding: 0 10px 6px;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.sb-tab {
-  flex: 1; height: 30px; background: none; border: none;
-  border-radius: 8px; color: var(--t3); font-size: 13px;
-  font-weight: 600; cursor: pointer; transition: all 150ms;
-}
-.sb-tab.active { background: rgba(37,99,235,0.12); color: #60a5fa; }
-.sb-tab:hover:not(.active) { background: var(--bg-3); color: var(--t2); }
+    .brand-logo {
+      width: 36px; height: 36px;
+      background: var(--grad-brand);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: 16px; color: #fff;
+      box-shadow: 0 4px 12px rgba(124,106,245,.3);
+    }
 
-/* List */
-.sb-list { flex: 1; overflow-y: auto; padding: 2px 0; }
+    .brand-name {
+      font-family: var(--font-display);
+      font-size: 20px; font-weight: 700;
+      color: var(--text-primary);
+    }
 
-/* Chat row */
-.chat-row {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 9px 12px;
-  cursor: pointer;
-  border-radius: 10px;
-  margin: 0 6px;
-  transition: background 150ms;
-}
-.chat-row:hover { background: var(--bg-3); }
-.chat-row.active { background: rgba(37,99,235,0.1); }
-.chat-row.active .chat-row-name { color: #60a5fa; }
-.chat-row-info { flex: 1; min-width: 0; }
-.chat-row-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.chat-row-name {
-  font-size: 14px; font-weight: 600; color: var(--t1);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.chat-row-time { font-size: 11px; color: var(--t3); flex-shrink: 0; }
-.chat-row-preview {
-  font-size: 12px; color: var(--t2);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.unread-dot {
-  background: var(--blue); color: white;
-  font-size: 10px; font-weight: 700;
-  min-width: 17px; height: 17px;
-  border-radius: 99px;
-  display: flex; align-items: center; justify-content: center;
-  padding: 0 4px; flex-shrink: 0;
-}
+    .sb-actions { display: flex; gap: 4px; }
 
-/* Avatar */
-.avatar {
-  width: 40px; height: 40px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 15px; font-weight: 700; color: white;
-  flex-shrink: 0; position: relative;
-}
-.avatar.sm { width: 32px; height: 32px; font-size: 12px; }
-.avatar.xs { width: 26px; height: 26px; font-size: 10px; margin-bottom: 18px; }
-.green-dot {
-  position: absolute; bottom: 0; right: 0;
-  width: 9px; height: 9px;
-  background: #22c55e; border: 2px solid var(--bg-1);
-  border-radius: 50%;
-}
+    .icon-btn {
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted);
+      transition: all .15s;
+    }
+    .icon-btn:hover { background: var(--bg-hover); color: var(--accent-primary); }
+    .icon-btn.sm { width: 28px; height: 28px; border-radius: 8px; }
 
-/* Empty / loading */
-.empty-hint {
-  display: flex; flex-direction: column; align-items: center;
-  justify-content: center; padding: 40px 20px;
-  text-align: center; color: var(--t3); gap: 6px;
-}
-.empty-hint p { font-size: 14px; font-weight: 600; color: var(--t2); }
-.empty-hint span { font-size: 12px; }
-.empty-hint.sm { padding: 20px; }
-.loading-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 14px; color: var(--t2); font-size: 13px;
-}
-.mini-spin {
-  width: 14px; height: 14px;
-  border: 2px solid var(--border); border-top-color: var(--blue);
-  border-radius: 50%; animation: spin 0.7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
+    .my-profile {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-light);
+    }
 
-/* Sidebar footer */
-.sb-footer {
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-  flex-shrink: 0;
-}
-.sb-profile { display: flex; align-items: center; gap: 9px; }
-.sb-profile-name { font-size: 13px; font-weight: 700; color: var(--t1); }
-.sb-profile-status { font-size: 11px; color: #22c55e; }
+    .my-av {
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: 13px; color: #fff;
+      flex-shrink: 0;
+    }
 
-/* Icon button */
-.icon-btn {
-  width: 32px; height: 32px; background: none; border: none;
-  border-radius: 8px; color: var(--t2);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: all 150ms;
-}
-.icon-btn:hover { background: var(--bg-3); color: var(--t1); }
-.icon-btn.red-hover:hover { background: rgba(239,68,68,0.1); color: #f87171; }
+    .my-name {
+      display: block;
+      font-size: 13.5px; font-weight: 600;
+      color: var(--text-primary);
+    }
 
-/* ══ MAIN ════════════════════════════════════════ */
-.main {
-  flex: 1; display: flex; flex-direction: column;
-  overflow: hidden; min-width: 0;
-}
+    .my-status { font-size: 11px; color: var(--text-muted); }
 
-.mobile-topbar {
-  display: none; align-items: center; gap: 12px;
-  padding: 0 14px; height: 52px;
-  background: var(--bg-1); border-bottom: 1px solid var(--border);
-  font-size: 15px; font-weight: 700; color: var(--t1);
-  flex-shrink: 0;
-}
-@media (max-width: 768px) { .mobile-topbar { display: flex; } }
+    .sb-search { padding: 12px 12px 8px; }
 
-/* ══ EMPTY STATE ════════════════════════════════ */
-.no-chat {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-}
-.no-chat-box {
-  text-align: center; color: var(--t3);
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-}
-.no-chat-box svg { margin-bottom: 8px; }
-.no-chat-box h3 { font-size: 18px; font-weight: 700; color: var(--t2); }
-.no-chat-box p { font-size: 14px; margin-bottom: 8px; }
-.start-btn {
-  background: rgba(37,99,235,0.1); border: 1px solid rgba(37,99,235,0.3);
-  color: #60a5fa; padding: 9px 20px; border-radius: 99px;
-  font-size: 14px; font-weight: 600; cursor: pointer; transition: all 160ms;
-}
-.start-btn:hover { background: rgba(37,99,235,0.18); }
+    .search-box {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--bg-elevated);
+      border: 1.5px solid var(--border-light);
+      border-radius: 12px;
+      padding: 9px 12px;
+      transition: border-color .15s;
+    }
 
-/* ══ CHAT VIEW ═══════════════════════════════════ */
-.chat-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .search-box:focus-within { border-color: var(--accent-primary); }
+    .search-box svg { color: var(--text-muted); flex-shrink: 0; }
+    .search-box input {
+      flex: 1; background: none; border: none; outline: none;
+      font-size: 13.5px; color: var(--text-primary);
+    }
+    .search-box input::placeholder { color: var(--text-muted); }
+    .clr-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 11px; min-height: unset; min-width: unset; }
 
-/* Chat header */
-.chat-header {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px;
-  background: var(--bg-1); border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.back-btn { display: none; }
-@media (max-width: 768px) { .back-btn { display: flex; } }
-.header-info { flex: 1; min-width: 0; }
-.header-name { font-size: 15px; font-weight: 700; color: var(--t1); display: block; }
-.header-status { font-size: 12px; }
-.typing-label  { color: #60a5fa; font-style: italic; }
-.online-label  { color: #22c55e; }
-.offline-label { color: var(--t3); }
-.header-actions { display: flex; gap: 2px; }
+    /* People panel */
+    .people-panel {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg-secondary);
+      z-index: 50;
+      display: flex; flex-direction: column;
+      box-shadow: var(--shadow-lg);
+    }
 
-/* Messages area */
-.msgs-area { flex: 1; overflow-y: auto; padding: 0 16px; }
-.msgs-inner {
-  max-width: 780px; margin: 0 auto;
-  padding: 20px 0; display: flex; flex-direction: column; gap: 2px;
-}
-.msgs-loading {
-  display: flex; justify-content: center; padding: 32px;
-}
-.msgs-empty {
-  text-align: center; color: var(--t3);
-  padding: 48px; font-size: 14px;
-}
+    .pp-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid var(--border-light);
+      font-family: var(--font-display);
+      font-size: 16px; font-weight: 600;
+    }
 
-/* Date separator */
-.date-sep {
-  display: flex; align-items: center; gap: 12px;
-  margin: 16px 0; color: var(--t3);
-  font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.5px;
-}
-.date-sep::before, .date-sep::after {
-  content: ''; flex: 1; height: 1px; background: var(--border);
-}
+    .pp-search { padding: 12px 16px; }
 
-/* Bubble row */
-.bubble-row {
-  display: flex; align-items: flex-end; gap: 7px;
-  animation: msgIn 200ms ease forwards;
-}
-.bubble-row.mine { flex-direction: row-reverse; }
-@keyframes msgIn {
-  from { opacity:0; transform:translateY(8px); }
-  to   { opacity:1; transform:translateY(0); }
-}
+    .pp-input {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--bg-elevated);
+      border: 1.5px solid var(--border-light);
+      border-radius: 12px;
+      font-size: 14px;
+      color: var(--text-primary);
+      transition: border-color .15s;
+    }
+    .pp-input:focus { border-color: var(--accent-primary); }
+    .pp-input::placeholder { color: var(--text-muted); }
 
-.bubble-wrap { max-width: 65%; display: flex; flex-direction: column; }
-.bubble-row.mine .bubble-wrap { align-items: flex-end; }
+    .pp-loading { display: flex; justify-content: center; padding: 20px; }
 
-.sender-name {
-  font-size: 11px; font-weight: 600; color: var(--t3);
-  margin-bottom: 3px; padding-left: 2px;
-}
+    .pp-user {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border-light);
+      transition: background .12s;
+    }
+    .pp-user:hover { background: var(--bg-hover); }
 
-.bubble {
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  border-radius: 16px 16px 16px 4px;
-  padding: 9px 13px;
-  font-size: 14px; line-height: 1.5; color: var(--t1);
-  word-break: break-word;
-}
-.bubble.mine-bubble {
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  border-color: transparent;
-  border-radius: 16px 16px 4px 16px;
-}
-.bubble.deleted { color: var(--t3); font-style: italic; }
+    .pp-av {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: 14px; color: #fff;
+      flex-shrink: 0;
+    }
 
-.bubble-meta {
-  display: flex; align-items: center; gap: 4px;
-  margin-top: 3px; padding: 0 3px;
-}
-.bubble-meta.mine-meta { justify-content: flex-end; }
-.msg-time { font-size: 10px; color: var(--t3); }
+    .pp-info { flex: 1; }
+    .pp-name { display: block; font-size: 14px; font-weight: 600; }
+    .pp-email { font-size: 12px; color: var(--text-muted); }
 
-/* Typing bubble */
-.typing-bubble {
-  display: flex; gap: 5px; align-items: center;
-  padding: 10px 14px;
-}
-.typing-bubble span {
-  display: block; width: 7px; height: 7px;
-  background: var(--t2); border-radius: 50%;
-  animation: bounce 1.2s infinite;
-}
-.typing-bubble span:nth-child(2) { animation-delay: 0.2s; }
-.typing-bubble span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes bounce {
-  0%,60%,100% { transform:translateY(0); }
-  30%         { transform:translateY(-6px); }
-}
+    .pp-status-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      border: 2px solid #fff;
+    }
+    .pp-status-dot.online { background: var(--accent-green); }
 
-/* Message input */
-.input-area {
-  padding: 10px 16px 14px;
-  background: var(--bg-1); border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.input-row {
-  display: flex; align-items: center; gap: 8px;
-  max-width: 780px; margin: 0 auto;
-}
-.input-box {
-  flex: 1;
-  background: var(--bg-3); border: 1.5px solid var(--border);
-  border-radius: 99px; height: 44px;
-  display: flex; align-items: center;
-  transition: border-color 180ms, box-shadow 180ms;
-}
-.input-box.focused {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
-}
-.msg-input {
-  flex: 1; background: none; border: none; outline: none;
-  color: var(--t1); font-size: 14px; padding: 0 16px; height: 100%;
-  font-family: 'Plus Jakarta Sans', sans-serif;
-}
-.msg-input::placeholder { color: var(--t3); }
-.send-btn {
-  width: 44px; height: 44px; border-radius: 50%;
-  background: var(--blue); border: none; color: white;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer; flex-shrink: 0;
-  transition: all 180ms; box-shadow: 0 2px 10px rgba(37,99,235,0.4);
-}
-.send-btn:hover:not(:disabled) { background: #1d4ed8; transform: scale(1.06); }
-.send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .pp-empty, .pp-hint {
+      padding: 24px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
 
-/* ══ MODAL ═══════════════════════════════════════ */
-.backdrop {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.65); backdrop-filter: blur(4px);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 200;
-}
-.modal {
-  background: var(--bg-2); border: 1px solid var(--border);
-  border-radius: 18px; width: 90%; max-width: 400px;
-  max-height: 65vh; display: flex; flex-direction: column;
-  overflow: hidden; animation: fadeUp 200ms ease forwards;
-}
-@keyframes fadeUp {
-  from { opacity:0; transform:translateY(14px); }
-  to   { opacity:1; transform:translateY(0); }
-}
-.modal-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 16px 10px; border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.modal-head h3 { font-size: 15px; font-weight: 700; color: var(--t1); }
-.modal-search { padding: 10px 14px; flex-shrink: 0; }
-.modal-list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+    .sb-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+    }
 
-/* Mobile sidebar overlay */
-.sb-overlay {
-  display: none;
-  position: fixed; inset: 0; z-index: 9;
-  background: rgba(0,0,0,0.4);
-}
-@media (max-width: 768px) { .sb-overlay { display: block; } }
+    .ske-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px;
+    }
+    .ske-av {
+      width: 44px; height: 44px;
+      border-radius: 50%; flex-shrink: 0;
+    }
+    .ske-body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
 
-  `],
+    .skeleton {
+      background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-hover) 50%, var(--bg-elevated) 75%);
+      background-size: 200% 100%;
+      animation: skelPulse 1.4s ease infinite;
+    }
+    @keyframes skelPulse { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+    .sb-empty {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      height: 200px; gap: 10px;
+      text-align: center; color: var(--text-muted);
+    }
+    .empty-icon { font-size: 40px; }
+
+    .start-btn {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 20px;
+      background: var(--grad-brand);
+      color: #fff; border: none; border-radius: 12px;
+      font-family: var(--font-body);
+      font-size: 13.5px; font-weight: 600;
+      cursor: pointer;
+      transition: all .2s;
+      box-shadow: 0 4px 12px rgba(124,106,245,.3);
+      margin-top: 8px;
+      min-height: unset;
+    }
+    .start-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(124,106,245,.4); }
+
+    /* Chat item */
+    .ci {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background .12s;
+      margin-bottom: 2px;
+    }
+    .ci:hover { background: var(--bg-hover); }
+    .ci.active { background: rgba(124,106,245,.1); }
+
+    .ci-av {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: 14px; color: #fff;
+      flex-shrink: 0; position: relative;
+    }
+
+    .ci-dot {
+      position: absolute; bottom: 1px; right: 1px;
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      border: 2px solid var(--bg-secondary);
+    }
+    .ci-dot.online { background: var(--accent-green); }
+
+    .ci-body { flex: 1; min-width: 0; }
+    .ci-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; }
+    .ci-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+    .ci-time { font-size: 10.5px; color: var(--text-muted); flex-shrink: 0; }
+    .ci-bottom { display: flex; align-items: center; justify-content: space-between; }
+    .ci-preview { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+    .ci-preview.unread { color: var(--text-secondary); font-weight: 500; }
+    .ci-badge {
+      min-width: 18px; height: 18px; padding: 0 5px;
+      background: var(--accent-primary);
+      border-radius: 9px; font-size: 10px; font-weight: 700;
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* ── MAIN ── */
+    .main {
+      display: flex; flex-direction: column;
+      height: 100vh; overflow: hidden;
+      background: var(--bg-primary);
+    }
+
+    .welcome {
+      flex: 1;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 14px; text-align: center;
+      padding: 20px;
+    }
+
+    .welcome-art {
+      position: relative;
+      width: 90px; height: 90px;
+      margin-bottom: 8px;
+    }
+
+    .w-circle {
+      position: absolute; border-radius: 50%;
+    }
+    .c1 {
+      width: 80px; height: 80px;
+      background: rgba(124,106,245,.12);
+      top: 5px; left: 5px;
+      animation: pulse 2s ease infinite;
+    }
+    .c2 {
+      width: 60px; height: 60px;
+      background: rgba(245,166,35,.1);
+      top: 15px; left: 15px;
+      animation: pulse 2s ease infinite .5s;
+    }
+
+    .w-logo {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 52px; height: 52px;
+      background: var(--grad-brand);
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: 22px; color: #fff;
+      box-shadow: 0 6px 20px rgba(124,106,245,.35);
+    }
+
+    .welcome h2 {
+      font-family: var(--font-display);
+      font-size: 26px; font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .welcome p { color: var(--text-muted); font-size: 14px; }
+
+    /* Chat Header */
+    .chat-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 20px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-light);
+      box-shadow: var(--shadow-sm);
+      flex-shrink: 0;
+      min-height: 66px;
+    }
+
+    .header-av {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-display);
+      font-weight: 700; font-size: 13px; color: #fff;
+      flex-shrink: 0;
+    }
+
+    .header-info { flex: 1; }
+    .header-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+    .header-status {
+      font-size: 12px; color: var(--text-muted);
+      display: flex; align-items: center; gap: 5px; margin-top: 2px;
+    }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%; background: var(--text-muted);
+      display: inline-block;
+    }
+    .status-dot.online { background: var(--accent-green); }
+
+    .typing-status {
+      display: flex; align-items: center; gap: 4px;
+      color: var(--accent-primary); font-style: italic;
+    }
+
+    /* CALL BUTTONS */
+    .header-calls { display: flex; gap: 8px; }
+
+    .call-btn {
+      width: 40px; height: 40px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      border: none; cursor: pointer;
+      transition: all .2s;
+    }
+
+    .call-btn.audio {
+      background: rgba(46,204,113,.12);
+      color: #2ECC71;
+    }
+    .call-btn.audio:hover {
+      background: var(--grad-green);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(46,204,113,.35);
+      transform: translateY(-1px);
+    }
+
+    .call-btn.video {
+      background: rgba(52,152,219,.12);
+      color: #3498DB;
+    }
+    .call-btn.video:hover {
+      background: linear-gradient(135deg, #3498DB, #2980B9);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(52,152,219,.35);
+      transform: translateY(-1px);
+    }
+
+    /* Messages */
+    .msgs {
+      flex: 1; overflow-y: auto;
+      padding: 16px 20px;
+      display: flex; flex-direction: column;
+      gap: 4px; min-height: 0;
+    }
+
+    .msgs-load { display: flex; justify-content: center; padding: 30px; }
+
+    .date-sep {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 0; flex-shrink: 0;
+    }
+    .date-sep::before, .date-sep::after {
+      content: ''; flex: 1; height: 1px;
+      background: var(--border-light);
+    }
+    .date-sep span {
+      font-size: 11px; color: var(--text-muted);
+      font-weight: 500;
+      padding: 3px 12px;
+      background: var(--bg-elevated);
+      border-radius: 20px;
+      border: 1px solid var(--border-light);
+      white-space: nowrap;
+    }
+
+    .msg-row {
+      display: flex; align-items: flex-end; gap: 8px;
+      animation: fadeUp .2s ease forwards;
+    }
+    .msg-row.out { flex-direction: row-reverse; }
+
+    .msg-av {
+      width: 28px; height: 28px;
+      border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; color: #fff;
+      font-family: var(--font-display);
+      margin-bottom: 2px;
+    }
+
+    .msg-wrap { max-width: 65%; display: flex; flex-direction: column; gap: 3px; }
+    .msg-row.out .msg-wrap { align-items: flex-end; }
+
+    .reply-preview {
+      padding: 6px 10px;
+      background: var(--bg-elevated);
+      border-left: 3px solid var(--accent-primary);
+      border-radius: 8px;
+      margin-bottom: 3px;
+    }
+    .reply-preview.out { border-left-color: rgba(255,255,255,.4); }
+    .reply-name { display: block; font-size: 10.5px; font-weight: 600; color: var(--accent-primary); }
+    .reply-text { font-size: 11.5px; color: var(--text-muted); }
+
+    .bubble {
+      padding: 10px 14px;
+      border-radius: 18px;
+      word-break: break-word;
+    }
+
+    .bubble.inc {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-light);
+      border-bottom-left-radius: 4px;
+      color: var(--text-primary);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .bubble.out {
+      background: var(--grad-brand);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+      box-shadow: 0 4px 12px rgba(124,106,245,.25);
+    }
+
+    .bubble.deleted { opacity: .6; }
+
+    .bubble-text { font-size: 14px; line-height: 1.5; }
+    .deleted-text { font-size: 13px; font-style: italic; opacity: .7; }
+
+    .bubble-meta {
+      display: flex; align-items: center; justify-content: flex-end;
+      gap: 4px; margin-top: 4px;
+    }
+
+    .msg-time { font-size: 10px; opacity: .65; }
+    .bubble.out .msg-time { color: rgba(255,255,255,.85); }
+
+    .read-tick { display: flex; align-items: center; color: rgba(255,255,255,.65); }
+    .read-tick.read { color: #a8f0d8; }
+
+    .reactions { display: flex; gap: 4px; flex-wrap: wrap; }
+    .reactions.out { justify-content: flex-end; }
+    .react-pill {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-light);
+      border-radius: 20px; padding: 2px 8px;
+      font-size: 12px; cursor: pointer;
+      transition: all .12s; min-height: unset; min-width: unset;
+    }
+    .react-pill:hover { border-color: var(--accent-primary); }
+
+    .typing-bubble {
+      display: flex; align-items: center; gap: 4px;
+      padding: 12px 16px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-light);
+      border-radius: 18px; border-bottom-left-radius: 4px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .td {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent-primary);
+      display: inline-block;
+      animation: bounce 1.2s ease infinite;
+    }
+    .td:nth-child(2) { animation-delay: .2s; }
+    .td:nth-child(3) { animation-delay: .4s; }
+
+    /* Reply strip */
+    .reply-strip {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px;
+      background: var(--bg-elevated);
+      border-top: 1px solid var(--border-light);
+      flex-shrink: 0;
+    }
+    .reply-bar { width: 3px; height: 32px; background: var(--accent-primary); border-radius: 2px; flex-shrink: 0; }
+    .reply-strip-info { flex: 1; }
+    .reply-strip-name { display: block; font-size: 11px; font-weight: 600; color: var(--accent-primary); }
+    .reply-strip-text { font-size: 12px; color: var(--text-muted); }
+
+    /* Input */
+    .input-bar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border-light);
+      flex-shrink: 0;
+    }
+
+    .input-wrap {
+      flex: 1; display: flex; align-items: center; gap: 8px;
+      background: var(--bg-elevated);
+      border: 1.5px solid var(--border-light);
+      border-radius: 24px; padding: 8px 14px;
+      transition: border-color .15s;
+    }
+    .input-wrap.focused { border-color: var(--accent-primary); }
+
+    .msg-input {
+      flex: 1; background: none; border: none; outline: none;
+      font-size: 14px; color: var(--text-primary);
+    }
+    .msg-input::placeholder { color: var(--text-muted); }
+
+    .inp-icon-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      transition: color .15s; min-height: unset; min-width: unset;
+      width: 28px; height: 28px;
+    }
+    .inp-icon-btn:hover { color: var(--accent-primary); }
+
+    .send-btn {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg-elevated);
+      border: 1.5px solid var(--border-light);
+      cursor: pointer; color: var(--text-muted);
+      transition: all .2s cubic-bezier(.34,1.56,.64,1);
+    }
+    .send-btn.active {
+      background: var(--grad-brand);
+      border-color: transparent; color: #fff;
+      box-shadow: 0 4px 14px rgba(124,106,245,.4);
+    }
+    .send-btn.active:hover {
+      transform: scale(1.1);
+      box-shadow: 0 6px 20px rgba(124,106,245,.5);
+    }
+
+    .spin {
+      width: 22px; height: 22px;
+      border: 2.5px solid var(--border-light);
+      border-top-color: var(--accent-primary);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes bounce { 0%,80%,100%{transform:translateY(0);opacity:.4} 40%{transform:translateY(-6px);opacity:1} }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ── MOBILE ── */
+    @media (max-width: 768px) {
+      .shell { grid-template-columns: 100% !important; }
+      .sidebar { width: 100%; position: absolute; inset: 0; z-index: 10; }
+      .sidebar.hidden { display: none; }
+      .main { position: absolute; inset: 0; z-index: 10; }
+      .main:not(.show) { display: none; }
+      .msgs { padding: 12px; }
+      .msg-wrap { max-width: 80%; }
+      .chat-header { padding: 10px 14px; }
+      .input-bar { padding: 10px 12px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+      .bubble-text { font-size: 15px; }
+      .call-btn { width: 36px; height: 36px; }
+    }
+  `]
 })
 export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
-  @ViewChild('scrollEl') scrollEl!: ElementRef
-  @ViewChild('anchor')   anchor!:   ElementRef
+  @ViewChild('msgsEl') msgsEl!: ElementRef<HTMLDivElement>
+  @ViewChild('anchor') anchor!: ElementRef
+  @ViewChild('msgInp') msgInp!: ElementRef<HTMLInputElement>
 
   private destroy$ = new Subject<void>()
+  private typingTimer: any = null
+  private doScroll = true
 
-  me: User | null = null
+  me         = this.auth.currentUser
+  activeChat = this.chatSvc.activeChat
+  messages   = this.chatSvc.messages
+  chats      = this.chatSvc.chats
+  typing     = this.chatSvc.typingUsers
 
-  // Data
-  chats:    Chat[]    = []
-  messages: Message[] = []
-  people:   User[]    = []
+  loading     = signal(false)
+  loadingMsgs = signal(false)
+  showPeople  = signal(false)
+  inpFocus    = signal(false)
+  searching   = signal(false)
+  replyTo     = signal<Message|null>(null)
+  people      = signal<any[]>([])
 
-  // Active state
-  activeChat: Chat | null = null
-  onlineIds:  string[]    = []
-  typingUsers: string[]   = []
+  sq  = ''
+  pq  = ''
+  txt = ''
 
-  // UI state
-  tab          = 'chats'
-  searchQ      = ''
-  modalSearch  = ''
-  msgText      = ''
-  inputFocused = false
-  sending      = false
-  sidebarOpen  = false
-  showModal    = false
-  loadingPeople = false
-  loadingMsgs   = false
-  shouldScroll  = false
+  filteredChats = computed(() => {
+    let list = this.chats()
+    if (this.sq) list = list.filter(c => this.chatName(c).toLowerCase().includes(this.sq.toLowerCase()))
+    return list
+  })
 
-  private typingTimer: ReturnType<typeof setTimeout> | null = null
+  msgGroups = computed(() => {
+    const msgs = this.messages()
+    if (!msgs.length) return []
+    const groups: {date:string; messages:any[]}[] = []
+    let curDate = '', curMsgs: any[] = []
+    msgs.forEach(m => {
+      const d = this.fmtDate(m.createdAt)
+      if (d !== curDate) {
+        if (curMsgs.length) groups.push({date: curDate, messages: curMsgs})
+        curDate = d; curMsgs = [{...m}]
+      } else curMsgs.push({...m})
+    })
+    if (curMsgs.length) groups.push({date: curDate, messages: curMsgs})
+    return groups
+  })
 
   constructor(
-    private auth:   AuthService,
+    private auth: AuthService,
     private socket: SocketService,
-    private chatSvc: ChatService,
+    public chatSvc: ChatService,
+    public callSvc: CallService,
+    private snack: MatSnackBar,
+    private zone: NgZone,
   ) {}
 
-  ngOnInit() {
-    this.me = this.auth.currentUser$()
-    this.loadChats()
-    this.setupSocket()
+  ngOnInit(): void {
+    this.socket.connect(this.me()?._id || '')
+    this.loading.set(true)
+    this.chatSvc.getMyChats().pipe(takeUntil(this.destroy$)).subscribe({
+      next: () => this.loading.set(false),
+      error: () => this.loading.set(false),
+    })
+    this.listenSocket()
   }
 
-  ngAfterViewChecked() {
-    if (this.shouldScroll) {
-      this.scrollToBottom()
-      this.shouldScroll = false
-    }
+  ngAfterViewChecked(): void {
+    if (this.doScroll) this.scrollBottom()
   }
 
-  ngOnDestroy() {
+  ngOnDestroy(): void {
     this.destroy$.next()
     this.destroy$.complete()
-    if (this.activeChat) this.socket.leaveChat(this.activeChat._id)
+    this.socket.disconnect()
   }
 
-  // ── Load chats list ────────────────────────────────────────
-  loadChats() {
-    this.chatSvc.getChats().pipe(takeUntil(this.destroy$)).subscribe({
-      next: res => { this.chats = res.data || [] },
+  @HostListener('window:resize') onResize() {}
+  mobile(): boolean { return window.innerWidth <= 768 }
+
+  pick(chat: Chat): void {
+    if (this.activeChat()?._id === chat._id) return
+    if (this.activeChat()) this.socket.leaveChat(this.activeChat()!._id)
+    this.chatSvc.activeChat.set(chat)
+    this.chatSvc.messages.set([])
+    this.replyTo.set(null)
+    this.doScroll = true
+    this.loadingMsgs.set(true)
+    this.chatSvc.getMessages(chat._id).pipe(takeUntil(this.destroy$)).subscribe({
+      next: () => { this.loadingMsgs.set(false); this.socket.joinChat(chat._id); this.doScroll = true },
+      error: () => this.loadingMsgs.set(false),
     })
   }
 
-  // ── Open a chat and load its messages ─────────────────────
-  openChat(chat: Chat) {
-    if (this.activeChat) this.socket.leaveChat(this.activeChat._id)
-    this.activeChat  = chat
-    this.messages    = []
-    this.typingUsers = []
-    this.sidebarOpen = false
-    this.socket.joinChat(chat._id)
-    this.loadMessages(chat._id)
-    // Mark messages as read
-    this.chatSvc.markAsRead(chat._id).pipe(takeUntil(this.destroy$)).subscribe()
-  }
-
-  // ── Load messages ──────────────────────────────────────────
-  loadMessages(chatId: string) {
-    this.loadingMsgs = true
-    this.chatSvc.getMessages(chatId).pipe(takeUntil(this.destroy$)).subscribe({
-      next: res => {
-        this.messages    = res.data || []
-        this.loadingMsgs = false
-        this.shouldScroll = true
-      },
-      error: () => { this.loadingMsgs = false },
-    })
-  }
-
-  // ── Send a message ─────────────────────────────────────────
-  send() {
-    const text = this.msgText.trim()
-    if (!text || !this.activeChat || this.sending) return
-    this.sending = true
-    this.msgText = ''
-
-    this.chatSvc.sendMessage(this.activeChat._id, text).pipe(takeUntil(this.destroy$)).subscribe({
-      next: res => {
-        // Add to messages list
-        this.messages.push(res.data)
-        this.shouldScroll = true
-        this.sending = false
-        // Update sidebar preview
-        const c = this.chats.find(c => c._id === this.activeChat?._id)
-        if (c) { c.lastMessageText = text; c.lastActivity = new Date().toISOString() }
-      },
-      error: () => {
-        this.msgText  = text  // put text back if failed
-        this.sending = false
-      },
-    })
-  }
-
-  // ── Start a direct chat with a user ───────────────────────
-  startChat(user: User) {
-    this.chatSvc.createOrGetDirectChat(user._id).pipe(takeUntil(this.destroy$)).subscribe({
-      next: res => {
-        const chat = res.data
-        // Add to sidebar if not already there
-        if (!this.chats.find(c => c._id === chat._id)) this.chats.unshift(chat)
-        this.openChat(chat)
-        this.tab = 'chats'
-      },
-    })
-  }
-
-  // ── Typing indicator ───────────────────────────────────────
-  onTyping() {
-    if (!this.activeChat || !this.me) return
-    this.socket.sendTypingStart(this.activeChat._id, this.me._id, this.me.name)
-    if (this.typingTimer) clearTimeout(this.typingTimer)
-    this.typingTimer = setTimeout(() => {
-      if (this.activeChat && this.me)
-        this.socket.sendTypingStop(this.activeChat._id, this.me._id)
-    }, 1500)
-  }
-
-  // ── Switch to People tab ───────────────────────────────────
-  switchToPeople() {
-    this.tab = 'people'
-    if (this.people.length === 0) this.fetchPeople()
-  }
-
-  openNewChatModal() {
-    this.showModal = true
-    if (this.people.length === 0) this.fetchPeople()
-  }
-
-  fetchPeople() {
-    this.loadingPeople = true
-    this.chatSvc.getUsers().pipe(takeUntil(this.destroy$)).subscribe({
-      next: res => { this.people = res.data || []; this.loadingPeople = false },
-      error: () => { this.loadingPeople = false },
-    })
-  }
-
-  // ── Socket setup ───────────────────────────────────────────
-  setupSocket() {
-    // Online users list
-    this.socket.on<string[]>('users:online-list')
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(ids => { this.onlineIds = ids })
-
-    // Incoming message from another user via socket
-    this.socket.on<Message>('message:received')
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(msg => {
-        // Only add if not already in messages (avoid duplicate with sendMessage API response)
-        if (this.activeChat && msg.chat === this.activeChat._id) {
-          const exists = this.messages.find(m => m._id === msg._id)
-          if (!exists) {
-            this.messages.push(msg)
-            this.shouldScroll = true
+  listenSocket(): void {
+    this.socket.on<{message: Message}>('message:new').pipe(takeUntil(this.destroy$)).subscribe(({message}) => {
+      this.zone.run(() => {
+        if (message.chat === this.activeChat()?._id) {
+          if (message.sender._id === this.me()?._id) {
+            this.chatSvc.messages.update(ms => ms.filter(m => !m._id.startsWith('tmp_')))
           }
+          this.chatSvc.addMessage(message)
+          this.doScroll = true
+        } else {
+          this.chatSvc.chats.update(list => list.map(c =>
+            c._id === message.chat ? {...c, lastMessage: message, unreadCount: (c.unreadCount||0)+1} : c
+          ))
         }
-        // Update sidebar preview
-        const c = this.chats.find(c => c._id === msg.chat)
-        if (c) { c.lastMessageText = msg.content; c.lastActivity = msg.createdAt }
       })
+    })
 
-    // Message deleted
-    this.socket.on<{ messageId: string }>('message:deleted')
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(({ messageId }) => {
-        const msg = this.messages.find(m => m._id === messageId)
-        if (msg) { msg.isDeleted = true; msg.content = 'This message was deleted' }
+    this.socket.on<{userId:string;chatId:string}>('typing:start').pipe(takeUntil(this.destroy$)).subscribe(({userId, chatId}) => {
+      if (userId !== this.me()?._id) this.chatSvc.setTyping(chatId, userId, true)
+    })
+
+    this.socket.on<{userId:string;chatId:string}>('typing:stop').pipe(takeUntil(this.destroy$)).subscribe(({userId, chatId}) => {
+      this.chatSvc.setTyping(chatId, userId, false)
+    })
+
+    this.socket.on<{userId:string}>('user:online').pipe(takeUntil(this.destroy$)).subscribe(({userId}) => {
+      this.zone.run(() => {
+        this.chatSvc.chats.update(list => list.map(c => ({...c, members: c.members.map((m:any) =>
+          m.user._id === userId ? {...m, user:{...m.user, status:'online'}} : m
+        )})))
       })
+    })
 
-    // Typing started
-    this.socket.on<{ userId: string }>('typing:started')
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(({ userId }) => {
-        if (userId !== this.me?._id && !this.typingUsers.includes(userId))
-          this.typingUsers.push(userId)
+    this.socket.on<{userId:string}>('user:offline').pipe(takeUntil(this.destroy$)).subscribe(({userId}) => {
+      this.zone.run(() => {
+        this.chatSvc.chats.update(list => list.map(c => ({...c, members: c.members.map((m:any) =>
+          m.user._id === userId ? {...m, user:{...m.user, status:'offline'}} : m
+        )})))
       })
+    })
 
-    // Typing stopped
-    this.socket.on<{ userId: string }>('typing:stopped')
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(({ userId }) => {
-        this.typingUsers = this.typingUsers.filter(id => id !== userId)
+    this.socket.on<{userIds:string[]}>('users:online-list').pipe(takeUntil(this.destroy$)).subscribe(({userIds}) => {
+      this.zone.run(() => {
+        this.chatSvc.chats.update(list => list.map(c => ({...c, members: c.members.map((m:any) =>
+          userIds.includes(m.user._id) ? {...m, user:{...m.user, status:'online'}} : m
+        )})))
       })
+    })
   }
 
-  // ── Helpers ────────────────────────────────────────────────
-
-  getChatName(chat: Chat): string {
-    if (chat.type === 'group') return chat.name || 'Group Chat'
-    const other = chat.participants?.find(p => p.user?._id !== this.me?._id)
-    return other?.user?.name || 'Unknown'
+  send(): void {
+    const text = this.txt.trim()
+    if (!text || !this.activeChat()) return
+    const me = this.me()!
+    const chat = this.activeChat()!
+    const tmp: Message = {
+      _id: 'tmp_' + Date.now(), chat: chat._id,
+      sender: {_id: me._id, name: me.name, email: me.email||'', avatar: me.avatar, status: 'online'},
+      type: 'text', content: text,
+      replyTo: this.replyTo() as any,
+      reactions: [], readBy: [],
+      isDeleted: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    this.chatSvc.addMessage(tmp)
+    this.socket.sendMessage(chat._id, text)
+    this.txt = ''
+    this.replyTo.set(null)
+    this.doScroll = true
+    this.stopType()
   }
 
-  isOnline(chat: Chat): boolean {
-    if (chat.type === 'group') return false
-    const other = chat.participants?.find(p => p.user?._id !== this.me?._id)
-    return other ? this.onlineIds.includes(other.user?._id) : false
+  onType(): void {
+    if (!this.activeChat()) return
+    this.socket.sendTypingStart(this.activeChat()!._id, this.me()?._id||""  , this.me()?.name||"")
+    clearTimeout(this.typingTimer)
+    this.typingTimer = setTimeout(() => this.stopType(), 2000)
   }
 
-  isMine(msg: Message): boolean {
-    const senderId = (msg.sender as User)?._id ?? msg.sender
-    return senderId === this.me?._id
+  stopType(): void {
+    if (!this.activeChat()) return
+    clearTimeout(this.typingTimer)
+    this.socket.sendTypingStop(this.activeChat()!._id, this.me()?._id||"")
   }
 
-  get filteredChats(): Chat[] {
-    if (!this.searchQ) return this.chats
-    const q = this.searchQ.toLowerCase()
-    return this.chats.filter(c => this.getChatName(c).toLowerCase().includes(q))
+  setReply(m: Message): void { if (!m.isDeleted) this.replyTo.set(m) }
+
+  react(m: Message, emoji: string): void {
+    if (!this.activeChat()) return
+    this.socket.emit("message:react", { messageId: m._id, emoji, chatId: this.activeChat()!._id })
   }
 
-  get filteredPeople(): User[] {
-    if (!this.searchQ) return this.people
-    const q = this.searchQ.toLowerCase()
-    return this.people.filter(u =>
-      u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
-    )
+  findPeople(q: string): void {
+    if (!q.trim()) { this.people.set([]); return }
+    this.searching.set(true)
+    this.chatSvc.searchUsers(q).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (r: any) => { this.people.set(r.data?.users || []); this.searching.set(false) },
+      error: () => this.searching.set(false),
+    })
   }
 
-  get filteredModalPeople(): User[] {
-    if (!this.modalSearch) return this.people
-    const q = this.modalSearch.toLowerCase()
-    return this.people.filter(u =>
-      u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
-    )
+  openChat(userId: string, name: string): void {
+    this.chatSvc.createOrGetChat(userId).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (r: any) => {
+        this.showPeople.set(false)
+        this.people.set([])
+        this.pq = ''
+        const chat = r.data?.chat || r.data
+        if (chat) this.pick(this.chatSvc.chats().find(c => c._id === chat._id) || chat)
+      },
+      error: () => this.snack.open('Failed to open chat', '✕', {duration: 3000}),
+    })
   }
 
-  colorFor(name: string): string {
-    const palette = ['#2563eb','#7c3aed','#db2777','#ea580c','#16a34a','#0891b2','#9333ea','#0f766e']
-    let h = 0
-    for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h)
-    return palette[Math.abs(h) % palette.length]
+  callAudio(): void {
+    const other = this.getOtherUser()
+    if (!other || !this.activeChat()) return
+    this.callSvc.startCall(this.activeChat()!._id, other._id, other.name, 'audio')
   }
 
-  showDateSep(i: number): boolean {
-    if (i === 0) return true
-    const a = new Date(this.messages[i - 1].createdAt).toDateString()
-    const b = new Date(this.messages[i].createdAt).toDateString()
-    return a !== b
+  callVideo(): void {
+    const other = this.getOtherUser()
+    if (!other || !this.activeChat()) return
+    this.callSvc.startCall(this.activeChat()!._id, other._id, other.name, 'video')
   }
 
-  formatDate(d: string): string {
-    const date = new Date(d)
-    const today     = new Date()
-    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1)
-    if (date.toDateString() === today.toDateString())     return 'Today'
-    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
-    return date.toLocaleDateString([], { weekday:'long', month:'short', day:'numeric' })
+  private getOtherUser() {
+    const chat = this.activeChat()
+    if (!chat) return null
+    return this.chatSvc.getChatOtherUser(chat, this.me()?._id || '')
   }
 
-  formatTime(d: string): string {
-    return new Date(d).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })
+  logout(): void { this.auth.logout() }
+
+  onScroll(e: Event): void {
+    const el = e.target as HTMLElement
+    this.doScroll = el.scrollHeight - el.scrollTop - el.clientHeight < 120
   }
 
-  ago(d: string): string {
-    if (!d) return ''
-    const date = new Date(d)
-    const now   = new Date()
-    const diff  = Math.floor((now.getTime() - date.getTime()) / 86400000)
-    if (diff === 0) return date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })
-    if (diff === 1) return 'Yesterday'
-    if (diff < 7)   return date.toLocaleDateString([], { weekday:'short' })
-    return date.toLocaleDateString([], { day:'numeric', month:'short' })
+  scrollBottom(): void {
+    try { this.anchor?.nativeElement?.scrollIntoView({behavior: 'smooth'}) } catch {}
   }
 
-  scrollToBottom() {
-    try {
-      const el = this.scrollEl?.nativeElement
-      if (el) el.scrollTop = el.scrollHeight
-    } catch {}
+  isOut(m: Message): boolean { return m.sender._id === this.me()?._id }
+  isRead(m: Message): boolean {
+    return m.readBy.some((r: any) => {
+      const id = typeof r.user === 'object' ? r.user._id : r.user
+      return id !== this.me()?._id
+    })
   }
-
-  logout() { this.auth.logout() }
+  isTypingIn(chatId: string): boolean { return (this.typing()[chatId]||[]).length > 0 }
+  hasUnread(c: Chat): boolean { return (c.unreadCount||0) > 0 }
+  chatName(c: Chat): string { return this.chatSvc.getChatDisplayName(c, this.me()?._id||'') }
+  chatStatus(c: Chat): string {
+    if (c.type==='group') return 'online'
+    return this.chatSvc.getChatOtherUser(c, this.me()?._id||'')?.status || 'offline'
+  }
+  chatStatusTxt(c: Chat): string {
+    if (c.type==='group') return `${c.members.length} members`
+    return this.chatStatus(c) === 'online' ? 'Active now' : 'Offline'
+  }
+  preview(c: Chat): string {
+    if (!c.lastMessage) return 'No messages yet'
+    if (c.lastMessage.isDeleted) return '🚫 Message deleted'
+    const mine = c.lastMessage.sender._id === this.me()?._id
+    return (mine ? 'You: ' : '') + (c.lastMessage.content?.slice(0,42)||'')
+  }
+  avatarColor(name: string): string { return this.chatSvc.getAvatarColor(name) }
+  initials(name: string): string { return this.chatSvc.getInitials(name) }
+  groupReacts(m: Message): {emoji:string;count:number}[] {
+    const map: Record<string,number> = {}
+    m.reactions.forEach((r:any) => { map[r.emoji] = (map[r.emoji]||0)+1 })
+    return Object.entries(map).map(([emoji,count]) => ({emoji,count}))
+  }
+  fmtTime(d: string): string {
+    return new Date(d).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', hour12: true})
+  }
+  fmtDate(d: string): string {
+    const dt = new Date(d), t = new Date(), y = new Date(t)
+    y.setDate(t.getDate()-1)
+    if (dt.toDateString()===t.toDateString()) return 'Today'
+    if (dt.toDateString()===y.toDateString()) return 'Yesterday'
+    return dt.toLocaleDateString('en-IN', {day:'numeric', month:'long', year:'numeric'})
+  }
 }
