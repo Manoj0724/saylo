@@ -1,88 +1,107 @@
 import { Injectable, signal, computed } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
 import { Router } from '@angular/router'
-import { tap } from 'rxjs/operators'
-import { Observable } from 'rxjs'
+import { Observable, tap, catchError, throwError } from 'rxjs'
 import { environment } from '../../../environments/environment'
+import { SocketService } from './socket.service'
 
 export interface User {
-  _id: string
-  name: string
-  email: string
-  avatar: string | null
-  bio: string
-  status: 'online' | 'offline' | 'busy' | 'away'
-  lastSeen: string
-  createdAt: string
+  _id: string; name: string; email: string;
+  avatar: string | null; bio: string; status: string;
+  lastSeen: string; isVerified: boolean; createdAt: string;
 }
-
-export interface AuthResponse {
-  success: boolean
-  message: string
-  data: { user: User; token: string }
-}
+export interface AuthData { user: User; accessToken: string; refreshToken: string; }
+export interface AuthResponse { success: boolean; message: string; data: AuthData; }
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
-  private readonly TOKEN_KEY = 'saylo_token'
-  private readonly USER_KEY  = 'saylo_user'
-  private readonly api = `${environment.apiUrl}/auth`
+  private readonly API = `${environment.apiUrl}/auth`
 
-  // Reactive state using signals
-  currentUser = signal<User | null>(this.loadUser())
-  isLoggedIn  = computed(() => !!this.currentUser() && !!this.getToken())
+  private _user    = signal<User | null>(this.loadUser())
+  private _loading = signal<boolean>(false)
 
-  constructor(private http: HttpClient, private router: Router) {}
+  // Both names work: currentUser$() and currentUser()
+  readonly currentUser$ = this._user.asReadonly()
+  readonly currentUser  = this._user.asReadonly()
 
-  register(name: string, email: string, password: string): Observable<AuthResponse> {
-    return this.http.post<AuthResponse>(`${this.api}/register`, { name, email, password }).pipe(
-      tap((res) => this.storeSession(res))
+  readonly isLoading$ = this._loading.asReadonly()
+  readonly isLoggedIn = computed(() => !!this._user())
+
+  constructor(
+    private http:   HttpClient,
+    private router: Router,
+    private socket: SocketService,
+  ) {}
+
+  register(data: { name: string; email: string; password: string; phone?: string }): Observable<AuthResponse> {
+    this._loading.set(true)
+    return this.http.post<AuthResponse>(`${this.API}/register`, data).pipe(
+      tap((res: AuthResponse) => this.onSuccess(res)),
+      catchError((err: unknown) => { this._loading.set(false); return throwError(() => err) })
     )
   }
 
   login(email: string, password: string): Observable<AuthResponse> {
-    return this.http.post<AuthResponse>(`${this.api}/login`, { email, password }).pipe(
-      tap((res) => this.storeSession(res))
+    this._loading.set(true)
+    return this.http.post<AuthResponse>(`${this.API}/login`, { email, password }).pipe(
+      tap((res: AuthResponse) => this.onSuccess(res)),
+      catchError((err: unknown) => { this._loading.set(false); return throwError(() => err) })
     )
   }
 
   logout(): void {
-    this.http.post(`${this.api}/logout`, {}).subscribe()
-    localStorage.removeItem(this.TOKEN_KEY)
-    localStorage.removeItem(this.USER_KEY)
-    this.currentUser.set(null)
-    this.router.navigate(['/auth/login'])
+    this.http.post(`${this.API}/logout`, {}).subscribe({
+      complete: () => this.clear(),
+      error:    () => this.clear(),
+    })
   }
 
-  getMe(): Observable<{ success: boolean; data: { user: User } }> {
-    return this.http.get<{ success: boolean; data: { user: User } }>(`${this.api}/me`).pipe(
-      tap((res) => {
-        this.currentUser.set(res.data.user)
-        localStorage.setItem(this.USER_KEY, JSON.stringify(res.data.user))
-      })
+  refreshToken(): Observable<AuthResponse> {
+    return this.http.post<AuthResponse>(`${this.API}/refresh`, { refreshToken: this.getRefreshToken() }).pipe(
+      tap((res: AuthResponse) => {
+        localStorage.setItem('saylo_access_token',  res.data.accessToken)
+        localStorage.setItem('saylo_refresh_token', res.data.refreshToken)
+      }),
+      catchError((err: unknown) => { this.clear(); return throwError(() => err) })
     )
   }
 
-  getToken(): string | null {
-    return localStorage.getItem(this.TOKEN_KEY)
+  getAccessToken():  string | null { return localStorage.getItem('saylo_access_token') }
+  getRefreshToken(): string | null { return localStorage.getItem('saylo_refresh_token') }
+
+  isTokenExpired(): boolean {
+    const token = this.getAccessToken()
+    if (!token) return true
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1])) as { exp: number }
+      return payload.exp * 1000 < Date.now()
+    } catch { return true }
   }
 
-  getUserId(): string | null {
-    return this.currentUser()?._id ?? null
+  private onSuccess(res: AuthResponse): void {
+    const { user, accessToken, refreshToken } = res.data
+    localStorage.setItem('saylo_access_token',  accessToken)
+    localStorage.setItem('saylo_refresh_token', refreshToken)
+    localStorage.setItem('saylo_user', JSON.stringify(user))
+    this._user.set(user)
+    this.socket.connect(user._id)
+    this._loading.set(false)
+    void this.router.navigate(['/chats'])
   }
 
-  private storeSession(res: AuthResponse): void {
-    localStorage.setItem(this.TOKEN_KEY, res.data.token)
-    localStorage.setItem(this.USER_KEY, JSON.stringify(res.data.user))
-    this.currentUser.set(res.data.user)
+  private clear(): void {
+    localStorage.removeItem('saylo_access_token')
+    localStorage.removeItem('saylo_refresh_token')
+    localStorage.removeItem('saylo_user')
+    this._user.set(null)
+    this.socket.disconnect()
+    void this.router.navigate(['/auth/login'])
   }
 
   private loadUser(): User | null {
     try {
-      const raw = localStorage.getItem(this.USER_KEY)
-      return raw ? JSON.parse(raw) : null
-    } catch {
-      return null
-    }
+      const u = localStorage.getItem('saylo_user')
+      return u ? (JSON.parse(u) as User) : null
+    } catch { return null }
   }
 }

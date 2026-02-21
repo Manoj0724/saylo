@@ -1,15 +1,48 @@
-import { getMessages, deleteMessage, reactToMessage } from '../controllers/message.controller.js'
+import {
+  getMessages,
+  sendMessage,
+  deleteMessage,
+  markAsRead,
+} from '../controllers/message.controller.js'
 
-const auth = async (request, reply) => {
-  try {
-    await request.jwtVerify()
-  } catch {
-    reply.code(401).send({ error: 'Unauthorized' })
-  }
+const messageRoutes = async (fastify) => {
+  const auth = { onRequest: [fastify.authenticate] }
+
+  // GET /api/v1/messages/:chatId — get all messages in a chat
+  fastify.get('/:chatId', {
+    ...auth,
+    schema: { tags: ['Messages'], summary: 'Get messages in chat', security: [{ bearerAuth: [] }] },
+  }, getMessages)
+
+  // POST /api/v1/messages/:chatId — send a message in a chat
+  fastify.post('/:chatId', {
+    ...auth,
+    schema: {
+      tags: ['Messages'],
+      summary: 'Send a message',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['content'],
+        properties: {
+          content: { type: 'string', minLength: 1 },
+          type:    { type: 'string', enum: ['text', 'image', 'file'], default: 'text' },
+        },
+      },
+    },
+  }, sendMessage)
+
+  // DELETE /api/v1/messages/:messageId — delete a message
+  fastify.delete('/:messageId', {
+    ...auth,
+    schema: { tags: ['Messages'], summary: 'Delete a message', security: [{ bearerAuth: [] }] },
+  }, deleteMessage)
+
+  // POST /api/v1/messages/:chatId/read — mark all messages as read
+  fastify.post('/:chatId/read', {
+    ...auth,
+    schema: { tags: ['Messages'], summary: 'Mark messages as read', security: [{ bearerAuth: [] }] },
+  }, markAsRead)
 }
 
-export const messageRoutes = async (fastify) => {
-  fastify.get('/:chatId',    { preHandler: auth, handler: getMessages })
-  fastify.delete('/:id',     { preHandler: auth, handler: deleteMessage })
-  fastify.post('/:id/react', { preHandler: auth, handler: reactToMessage })
-}
+export default messageRoutes

@@ -1,143 +1,106 @@
-import { Injectable, signal } from '@angular/core'
+import { Injectable } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
-import { Observable, tap } from 'rxjs'
+import { Observable } from 'rxjs'
 import { environment } from '../../../environments/environment'
+import { User } from './auth.service'
 
-export interface Message {
-  _id: string
-  chat: string
-  sender: { _id: string; name: string; avatar: string | null }
-  type: 'text' | 'image' | 'file' | 'audio' | 'video' | 'system'
-  content: string
-  replyTo?: Message | null
-  reactions: { user: string; emoji: string }[]
-  readBy: { user: string; readAt: string }[]
-  isDeleted: boolean
-  createdAt: string
-}
+// ── Interfaces ────────────────────────────────────────────────
 
-export interface ChatMember {
-  user: { _id: string; name: string; avatar: string | null; status: string; lastSeen: string }
-  role: string
-  lastRead: string | null
+export interface Participant {
+  user:     User
+  role:     'admin' | 'member'
+  joinedAt: string
+  isMuted:  boolean
 }
 
 export interface Chat {
-  _id: string
-  type: 'private' | 'group'
-  name: string | null
-  avatar: string | null
-  members: ChatMember[]
-  lastMessage: Message | null
-  updatedAt: string
-  unreadCount?: number
+  _id:             string
+  type:            'direct' | 'group'
+  name?:           string
+  participants:    Participant[]
+  lastMessage?:    Message
+  lastMessageText?: string
+  lastActivity:    string
+  isActive:        boolean
+  unread?:         number
 }
+
+export interface Message {
+  _id:       string
+  chat:      string
+  sender:    User
+  content:   string
+  type:      string
+  isDeleted: boolean
+  isEdited:  boolean
+  readBy:    { user: string; readAt: string }[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiResponse<T> {
+  success: boolean
+  message: string
+  data:    T
+}
+
+// ── Service ───────────────────────────────────────────────────
 
 @Injectable({ providedIn: 'root' })
 export class ChatService {
-  private api = environment.apiUrl
-
-  activeChat   = signal<Chat | null>(null)
-  chats        = signal<Chat[]>([])
-  messages     = signal<Message[]>([])
-  typingUsers  = signal<Record<string, string[]>>({})  // chatId → userIds
+  private chatApi    = `${environment.apiUrl}/chats`
+  private messageApi = `${environment.apiUrl}/messages`
+  private userApi    = `${environment.apiUrl}/users`
 
   constructor(private http: HttpClient) {}
 
-  // ── CHATS ────────────────────────────────────────────────
-  getMyChats(): Observable<{ success: boolean; data: { chats: Chat[] } }> {
-    return this.http.get<any>(`${this.api}/chats`).pipe(
-      tap(res => this.chats.set(res.data.chats))
-    )
+  // Get all my chats
+  getChats(): Observable<ApiResponse<Chat[]>> {
+    return this.http.get<ApiResponse<Chat[]>>(this.chatApi)
   }
 
-  createOrGetChat(userId: string): Observable<{ success: boolean; data: { chat: Chat } }> {
-    return this.http.post<any>(`${this.api}/chats`, { userId }).pipe(
-      tap(res => {
-        const chat = res.data.chat
-        const exists = this.chats().find(c => c._id === chat._id)
-        if (!exists) this.chats.update(list => [chat, ...list])
-        this.activeChat.set(chat)
-      })
-    )
+  // Start or get existing direct chat with a user
+  createOrGetDirectChat(targetUserId: string): Observable<ApiResponse<Chat>> {
+    return this.http.post<ApiResponse<Chat>>(`${this.chatApi}/direct`, { targetUserId })
   }
 
-  createGroupChat(name: string, memberIds: string[]): Observable<any> {
-    return this.http.post<any>(`${this.api}/chats/group`, { name, memberIds }).pipe(
-      tap(res => {
-        this.chats.update(list => [res.data.chat, ...list])
-        this.activeChat.set(res.data.chat)
-      })
-    )
+  // Create group chat
+  createGroupChat(name: string, participantIds: string[]): Observable<ApiResponse<Chat>> {
+    return this.http.post<ApiResponse<Chat>>(`${this.chatApi}/group`, { name, participantIds })
   }
 
-  // ── MESSAGES ─────────────────────────────────────────────
-  getMessages(chatId: string, page = 1): Observable<any> {
-    return this.http.get<any>(`${this.api}/messages/${chatId}?page=${page}&limit=50`).pipe(
-      tap(res => {
-        if (page === 1) this.messages.set(res.data.messages)
-        else this.messages.update(msgs => [...res.data.messages, ...msgs])
-      })
-    )
+  // Delete / leave a chat
+  deleteChat(chatId: string): Observable<ApiResponse<null>> {
+    return this.http.delete<ApiResponse<null>>(`${this.chatApi}/${chatId}`)
   }
 
-  // ── USERS ────────────────────────────────────────────────
-  searchUsers(q: string): Observable<any> {
-    return this.http.get<any>(`${this.api}/users?q=${q}`)
+  // Get all messages in a chat
+  getMessages(chatId: string, page = 1): Observable<ApiResponse<Message[]>> {
+    return this.http.get<ApiResponse<Message[]>>(`${this.messageApi}/${chatId}?page=${page}&limit=50`)
   }
 
-  // ── LOCAL STATE HELPERS ──────────────────────────────────
-  addMessage(message: Message): void {
-    this.messages.update(msgs => [...msgs, message])
-    this.chats.update(list =>
-      list.map(c => c._id === message.chat
-        ? { ...c, lastMessage: message, updatedAt: message.createdAt }
-        : c
-      ).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    )
+  // Send a message
+  sendMessage(chatId: string, content: string): Observable<ApiResponse<Message>> {
+    return this.http.post<ApiResponse<Message>>(`${this.messageApi}/${chatId}`, { content })
   }
 
-  setTyping(chatId: string, userId: string, isTyping: boolean): void {
-    this.typingUsers.update(state => {
-      const current = state[chatId] || []
-      return {
-        ...state,
-        [chatId]: isTyping
-          ? [...new Set([...current, userId])]
-          : current.filter(id => id !== userId)
-      }
-    })
+  // Delete a message
+  deleteMessage(messageId: string): Observable<ApiResponse<null>> {
+    return this.http.delete<ApiResponse<null>>(`${this.messageApi}/${messageId}`)
   }
 
-getChatDisplayName(chat: Chat, myId: string): string {
-  if (!chat) return 'Unknown'
-  if (chat.type === 'group') return chat.name || 'Group'
-  const other = chat.members?.find(m => m.user?._id !== myId)
-  return other?.user?.name || 'Unknown'
-}
+  // Mark messages as read
+  markAsRead(chatId: string): Observable<ApiResponse<null>> {
+    return this.http.post<ApiResponse<null>>(`${this.messageApi}/${chatId}/read`, {})
+  }
 
-getChatOtherUser(chat: Chat, myId: string): ChatMember['user'] | null {
-  if (!chat || !chat.members) return null
-  return chat.members.find(m => m.user?._id !== myId)?.user || null
-}
+  // Get all users (for starting new chats)
+  getUsers(): Observable<ApiResponse<User[]>> {
+    return this.http.get<ApiResponse<User[]>>(this.userApi)
+  }
 
- getAvatarColor(name: string): string {
-  const colors = [
-    'linear-gradient(135deg,#6C63FF,#00D4FF)',
-    'linear-gradient(135deg,#FF6B9D,#FFB800)',
-    'linear-gradient(135deg,#00E5A0,#00D4FF)',
-    'linear-gradient(135deg,#FFB800,#FF6B9D)',
-    'linear-gradient(135deg,#8B5CF6,#EC4899)',
-    'linear-gradient(135deg,#10B981,#3B82F6)',
-  ]
-  if (!name || typeof name !== 'string') return colors[0]
-  let hash = 0
-  for (const ch of name) hash = ch.charCodeAt(0) + ((hash << 5) - hash)
-  return colors[Math.abs(hash) % colors.length]
-}
-
-getInitials(name: string): string {
-  if (!name || typeof name !== 'string') return '?'
-  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
-}
+  // Search users
+  searchUsers(query: string): Observable<ApiResponse<{ users: User[] }>> {
+    return this.http.get<ApiResponse<{ users: User[] }>>(`${this.userApi}/search?q=${query}`)
+  }
 }
