@@ -28,20 +28,7 @@ const fastify = Fastify({
 
 // ── 2. REGISTER CORS ────────────────────────────────────
 await fastify.register(cors, {
-  origin: (origin, callback) => {
-    const allowed = [
-      'http://localhost:4200',
-      'http://localhost:3000',
-      'https://manoj0724.github.io',
-      process.env.FRONTEND_URL,
-    ].filter(Boolean)
-
-    if (!origin || allowed.includes(origin)) {
-      callback(null, true)
-    } else {
-      callback(null, true) // Allow all for now during development
-    }
-  },
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
 })
